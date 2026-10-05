@@ -2,12 +2,13 @@
   "swt_version": "0.1.0",
   "python": "3.11.15",
   "numpy": "2.4.6",
-  "config_hash": "a578908257d7",
-  "source_hash": "a7b107bc3444",
-  "experiment_seconds": 79.0,
-  "context_build_seconds": 8.9,
+  "config_hash": "ac90959b035a",
+  "source_hash": "9bcf513fa351",
+  "experiment_seconds": 427.2,
+  "context_build_seconds": 7.2,
   "workers": 4,
   "cpu_count": 4,
+  "episodes": 610,
   "config": {
     "seed": 2026,
     "geometry": {
@@ -58,16 +59,61 @@
       "threshold_fraction": 0.5
     },
     "filter": {
-      "n_particles": 10000,
+      "n_particles": 2000,
       "ess_fraction": 0.75,
-      "shrinkage": 0.98,
+      "mcmc_sweeps": 2,
+      "rate_drift": 0.05,
+      "rate_drift_fallback": 0.1,
+      "adaptive_wear_noise": true,
+      "wear_noise_prior_passes": 4,
       "sigma_floor_um": 0.05,
-      "surrogate_n_eta": 512
+      "surrogate_n_eta": 512,
+      "robust": true,
+      "outlier_z": 5.0,
+      "inflation_block": 4,
+      "inflation_threshold": 1.2,
+      "profile_offsets": true
+    },
+    "worlds": {
+      "realistic": {
+        "pad": {
+          "kind": "foam",
+          "thickness_mm": 15.0
+        },
+        "force": {
+          "gain_sigma_log": 0.04,
+          "ripple": 0.03,
+          "ripple_corr": 0.5
+        },
+        "wear": {
+          "kind": "two_stage",
+          "fast_fraction": 0.25,
+          "fast_ratio": 6.0
+        },
+        "scan": {
+          "registration_sigma_mm": 0.3,
+          "profile_bias_um": 0.5,
+          "outlier_fraction": 0.005,
+          "outlier_um": 15.0,
+          "dropout_fraction": 0.02,
+          "dropout_gap_points": 8
+        }
+      }
     },
     "experiments": {
       "main_draw": "typical",
+      "main_world": "realistic",
       "early_pass": 2,
       "robustness_draws": 100,
+      "robustness_worlds": [
+        "matched",
+        "realistic"
+      ],
+      "ablation_world": "matched",
+      "noise_world": "realistic",
+      "noise_draws": 50,
+      "ablation_draws": 50,
+      "breakdown_draws": 40,
       "noise_levels_um": [
         1.0,
         2.0,
@@ -82,6 +128,23 @@
         0.0001,
         30.0,
         121
+      ]
+    },
+    "tuning": {
+      "draws": [
+        200,
+        220
+      ],
+      "worlds": [
+        "matched",
+        "realistic"
+      ],
+      "rate_drift": [
+        0.0,
+        0.05,
+        0.1,
+        0.15,
+        0.2
       ]
     }
   }

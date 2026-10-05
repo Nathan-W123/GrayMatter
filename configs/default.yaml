@@ -50,17 +50,58 @@ abrasive:
   threshold_fraction: 0.5         # change abrasive when K < 0.5 * K0
 
 filter:
-  n_particles: 10000
-  ess_fraction: 0.75              # tempering keeps ESS >= 75% of N (chosen on held-out draws 200-299)
-  shrinkage: 0.98
+  n_particles: 2000
+  ess_fraction: 0.75              # tempering keeps ESS >= 75% of N
+  mcmc_sweeps: 2                  # Metropolis-Hastings rejuvenation sweeps after each scan
+  rate_drift: auto                # random-walk s.d. of log(lambda) per pass (0 = constant wear rate);
+                                  # 'auto' = chosen by the tuning experiment on held-out draws
+  rate_drift_fallback: 0.1        # used by stand-alone runs before any tuning exists
+  adaptive_wear_noise: true       # wear fluctuation level re-estimated from the filter's own K innovations
+  wear_noise_prior_passes: 4      # weight of priors.wear_sigma_log in that estimate [passes]
   sigma_floor_um: 0.05
   surrogate_n_eta: 512
+  robust: true                    # outlier rejection + noise inflation for structured residuals
+  outlier_z: 5.0
+  inflation_block: 4
+  inflation_threshold: 1.2
+  profile_offsets: true           # random offset per scan profile in the noise model (variance estimated)
+
+# Hidden-process worlds. "matched" (always present) is the tracker's own model.
+# "realistic" adds every mismatch below at once; each is also run on its own.
+worlds:
+  realistic:
+    pad: {kind: foam, thickness_mm: 15.0}        # foam stiffens as it densifies
+    force:
+      gain_sigma_log: 0.04                        # per-run force-calibration error (~4%)
+      ripple: 0.03                                # force-control ripple: s.d. of each raster line's force
+      ripple_corr: 0.5                            # AR(1) correlation of the ripple between lines
+    wear: {kind: two_stage, fast_fraction: 0.25, fast_ratio: 6.0}   # fast break-in + slow dulling
+    scan:
+      registration_sigma_mm: 0.3                  # scan-to-part misalignment
+      profile_bias_um: 0.5                        # per-profile offset
+      outlier_fraction: 0.005
+      outlier_um: 15.0
+      dropout_fraction: 0.02
+      dropout_gap_points: 8
 
 experiments:
   main_draw: typical             # 'typical' = the robustness draw at the median standardised distance from
                                   # the prior centre (uses the truths only); or an integer draw id
+  main_world: realistic           # world of the headline main run (also run in the matched world)
   early_pass: 2                   # pass shown as "early" in the removal-map figure
-  robustness_draws: 100
+  robustness_draws: 100           # hidden truths per robustness world
+  robustness_worlds: [matched, realistic]
+  ablation_world: matched         # constant-force ablation (identifiability) in the tracker's own model
+  noise_world: realistic
+  noise_draws: 50                 # first draws of the noise world, re-run at every noise level
+  ablation_draws: 50              # first draws of the ablation world, re-run with constant force
+  breakdown_draws: 40             # first draws, re-run in each single-mismatch world
   noise_levels_um: [1.0, 2.0, 5.0, 10.0]
   crossing_decision_passes: [2, 5]
   contact_sweep_k: [1.0e-4, 30.0, 121]   # log-spaced k_pad sweep: [min, max, n]
+
+# Hyperparameter tuning on held-out draws (ids outside every experiment's range).
+tuning:
+  draws: [200, 220]               # [first, last + 1]
+  worlds: [matched, realistic]
+  rate_drift: [0.0, 0.05, 0.1, 0.15, 0.2]

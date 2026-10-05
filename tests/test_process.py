@@ -1,8 +1,9 @@
 import numpy as np
 import pytest
 
-from swt.process import (HiddenTruth, PassAction, make_schedule, preston_removal, simulate_truth,
-                         wear_step)
+from swt.pad import PadLaw
+from swt.process import (HiddenTruth, PassAction, WearLaw, World, line_effectiveness, make_schedule,
+                         preston_removal, simulate_truth, wear_step)
 from swt.scan import Scanner
 
 
@@ -46,16 +47,6 @@ def test_wear_decreases_effectiveness(small_ctx):
     assert np.all(np.diff(traj.K) < 0)
     assert traj.crossing_pass is not None
     assert traj.K_extended[traj.crossing_pass - 1] < 0.5 * 6e-5 <= traj.K_extended[traj.crossing_pass - 2]
-
-
-def test_surrogate_matches_exact_model(small_ctx, rng):
-    m, tab = small_ctx.model, small_ctx.table
-    pr = small_ctx.priors
-    for k in np.exp(rng.uniform(np.log(pr.k_low), np.log(pr.k_high), 12)):
-        for F in (20.0, 40.0):
-            exact = m.exposure(F, k)
-            approx = F * tab.map_full(F / k)
-            assert np.sqrt(np.mean((exact - approx) ** 2)) / np.sqrt(np.mean(exact**2)) < 2e-3
 
 
 def test_scan_noise_and_downsampling(small_ctx, rng):
@@ -120,3 +111,78 @@ def test_truth_follows_the_documented_wear_recursion(small_ctx):
     traj = simulate_truth(small_ctx.model, truth, small_ctx.schedule(), 0.0, np.random.default_rng(0))
     assert np.allclose(traj.K[1:], traj.K[:-1] * np.exp(-truth.lam * traj.volume[:-1]), rtol=1e-12)
     assert np.allclose(traj.volume, [small_ctx.model.volume(r) for r in traj.removal], rtol=1e-12)
+
+
+@pytest.mark.parametrize("wear", [WearLaw(), WearLaw("two_stage", 0.25, 6.0)])
+def test_within_pass_wear_conserves_volume(small_ctx, wear):
+    """K wears during the pass: the removal map's volume equals the volume that drives the
+    wear, and the K at the next pass is K0 * phi(W) with W the cumulative removed volume."""
+    world = World("w", wear=wear)
+    truth = HiddenTruth(0.05, 6e-5, 3e-4)
+    traj = simulate_truth(small_ctx.model, truth, small_ctx.schedule(), 0.0, np.random.default_rng(0), world=world)
+    W = np.concatenate([[0.0], np.cumsum(traj.volume)[:-1]])
+    assert np.allclose(traj.volume, [small_ctx.model.volume(r) for r in traj.removal], rtol=1e-9)
+    assert np.allclose(traj.K, [truth.K0 * wear.phi(truth.lam, w) for w in W], rtol=1e-6)
+
+
+def test_within_pass_wear_closed_form_is_the_ode_solution():
+    """Single-stage law: the closed form equals the RK4 integration used for other laws, and
+    with lambda = 0 every line has the starting effectiveness (removal linear in K)."""
+    u = np.array([3.0, 5.0, 2.0, 7.0]) * 1e5
+    K, lam = 6e-5, 3e-4
+    closed = line_effectiveness(K, lam, u)
+    ode = line_effectiveness(K, lam, u, WearLaw("two_stage", 0.0, 1.0), K0=K)   # f = 0: single stage via RK4
+    assert np.allclose(closed, ode, rtol=1e-8)
+    assert np.all(np.diff(closed) < 0)
+    assert np.all(line_effectiveness(K, 0.0, u) == K)
+
+
+def test_two_stage_wear_law():
+    w = WearLaw("two_stage", 0.25, 6.0)
+    assert w.phi(3e-4, 0.0) == 1.0
+    # faster than the single-stage law at first, the same rate in the long run
+    assert w.phi(3e-4, 500.0) < WearLaw().phi(3e-4, 500.0)
+    assert w.phi(3e-4, 2e4) / WearLaw().phi(3e-4, 2e4) == pytest.approx(0.75, rel=1e-3)
+
+
+def test_force_gain_scales_the_actual_force(small_ctx):
+    sched = make_schedule([30.0], 2, 8000.0)
+    t1 = simulate_truth(small_ctx.model, HiddenTruth(0.05, 6e-5, 0.0, force_gain=1.1), sched, 0.0,
+                        np.random.default_rng(0), max_extend=0)
+    t2 = simulate_truth(small_ctx.model, HiddenTruth(0.05, 6e-5, 0.0), make_schedule([33.0], 2, 8000.0), 0.0,
+                        np.random.default_rng(0), max_extend=0)
+    assert np.allclose(t1.removal, t2.removal, rtol=1e-12)
+
+
+def test_force_ripple_first_order_model(small_ctx):
+    """Ripple of 3%: the first-order line exposures match the exact ones to < 0.1%, the
+    oracle ignores the ripple, and without ripple nothing changes."""
+    m = small_ctx.model
+    sched = make_schedule([30.0], 1, 8000.0)
+    truth = HiddenTruth(0.05, 6e-5, 0.0)
+    world = World("r", force_ripple=0.03, ripple_corr=0.5)
+    traj = simulate_truth(m, truth, sched, 0.0, np.random.default_rng(0), max_extend=0, world=world,
+                          ripple_rng=np.random.default_rng(1))
+    # rebuild the ripple sequence and the exact removal line by line
+    r = np.random.default_rng(1).standard_normal(m.n_lines)
+    e = np.empty(m.n_lines)
+    e[0] = r[0]
+    for i in range(1, m.n_lines):
+        e[i] = 0.5 * e[i - 1] + np.sqrt(0.75) * r[i]
+    e *= 0.03
+    exact = sum(6e-5 * m.line_exposures(30.0 * (1 + e[i]), 0.05)[0][i] for i in range(m.n_lines))
+    assert np.linalg.norm(traj.removal[0] - exact) / np.linalg.norm(exact) < 1e-3
+    assert np.allclose(traj.oracle[0], m.removal(30.0, 0.05, 6e-5), rtol=1e-12)
+    plain = simulate_truth(m, truth, sched, 0.0, np.random.default_rng(0), max_extend=0)
+    assert np.allclose(plain.removal[0], m.removal(30.0, 0.05, 6e-5), rtol=1e-12)
+
+
+def test_foam_pad_changes_the_map_but_not_the_load(small_ctx):
+    m = small_ctx.model
+    foam = PadLaw("foam", 15.0)
+    for k in (1e-3, 0.05):
+        lin, _ = m.line_exposures(30.0, k)
+        fo, _ = m.line_exposures(30.0, k, law=foam)
+        # the same total load and sliding speed field -> almost the same volume; a different map
+        assert fo.sum() == pytest.approx(lin.sum(), rel=0.02)
+        assert np.linalg.norm(fo - lin) / np.linalg.norm(lin) > 1e-3

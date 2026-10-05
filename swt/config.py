@@ -13,8 +13,9 @@ import yaml
 
 from .estimators import PFConfig
 from .geometry import Panel, RasterPath, raster_path
-from .process import PassAction, Priors, ProcessModel, Sander, make_schedule
-from .scan import Scanner
+from .pad import LINEAR, PadLaw
+from .process import MATCHED, PassAction, Priors, ProcessModel, Sander, WearLaw, World, make_schedule
+from .scan import ScanArtefacts, Scanner
 from .surrogate import ExposureTable
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
@@ -59,7 +60,9 @@ class Context:
     priors: Priors
     table: ExposureTable
     obs_index: np.ndarray
+    obs_shape: tuple[int, int]
     pf: PFConfig
+    worlds: dict[str, tuple[World, ScanArtefacts]]
 
     @property
     def pad_radius(self) -> float:
@@ -72,6 +75,9 @@ class Context:
     @property
     def threshold(self) -> float:
         return float(self.cfg["abrasive"]["threshold_fraction"])
+
+    def world(self, name: str) -> tuple[World, ScanArtefacts]:
+        return self.worlds[name]
 
     def schedule(self, kind: str = "alternating") -> list[PassAction]:
         s = self.cfg["schedule"]
@@ -90,7 +96,8 @@ def build_context(cfg: dict) -> Context:
     pr = cfg["priors"]
     priors = Priors(pr["k_low"], pr["k_high"], pr["K0_median"], pr["K0_sigma_log"],
                     pr["lam_median"], pr["lam_sigma_log"])
-    obs_index = Scanner(panel, sc["noise_um"], sc["stride"]).obs_index
+    scanner = Scanner(panel, sc["noise_um"], sc["stride"])
+    obs_index, obs_shape = scanner.obs_index, scanner.obs_shape
     forces = list(cfg["schedule"]["forces_N"]) + [cfg["schedule"]["constant_force_N"]]
     margin = 1.02
     eta_min = min(forces) / priors.k_high / margin
@@ -98,9 +105,49 @@ def build_context(cfg: dict) -> Context:
     f = cfg["filter"]
     table = ExposureTable(model, eta_min, eta_max, int(f["surrogate_n_eta"]), obs_index)
     pf = PFConfig(n_particles=int(f["n_particles"]), ess_fraction=float(f["ess_fraction"]),
-                  shrinkage=float(f["shrinkage"]), wear_sigma=float(pr["wear_sigma_log"]),
+                  wear_sigma=float(pr["wear_sigma_log"]), rate_drift=_drift(f),
                   sigma_floor_um=float(f["sigma_floor_um"]),
-                  threshold=float(cfg["abrasive"]["threshold_fraction"]))
-    ctx = Context(cfg, panel, path, sander, model, priors, table, obs_index, pf)
+                  threshold=float(cfg["abrasive"]["threshold_fraction"]),
+                  mcmc_sweeps=int(f.get("mcmc_sweeps", 2)), robust=bool(f.get("robust", True)),
+                  outlier_z=float(f.get("outlier_z", 5.0)), inflation_block=int(f.get("inflation_block", 4)),
+                  inflation_threshold=float(f.get("inflation_threshold", 1.2)),
+                  profile_offsets=bool(f.get("profile_offsets", True)),
+                  adaptive_wear_noise=bool(f.get("adaptive_wear_noise", True)),
+                  wear_noise_prior_passes=float(f.get("wear_noise_prior_passes", 4.0)))
+    worlds = build_worlds(cfg.get("worlds", {}))
+    ctx = Context(cfg, panel, path, sander, model, priors, table, obs_index, obs_shape, pf, worlds)
     ctx.build_seconds = time.time() - t0
     return ctx
+
+
+def _drift(f: dict) -> float:
+    """``filter.rate_drift``: a number, or 'auto' (tuned by the tuning experiment;
+    ``rate_drift_fallback`` until then)."""
+    v = f.get("rate_drift", "auto")
+    return float(f.get("rate_drift_fallback", 0.1)) if str(v) == "auto" else float(v)
+
+
+def make_world(name: str, spec: dict) -> tuple[World, ScanArtefacts]:
+    """A hidden-process world from its config entry (missing keys = the tracker's model)."""
+    pad = spec.get("pad", {})
+    law = PadLaw("foam", float(pad["thickness_mm"])) if pad.get("kind", "linear") == "foam" else LINEAR
+    w = spec.get("wear", {})
+    wear = WearLaw(w.get("kind", "single"), float(w.get("fast_fraction", 0.25)), float(w.get("fast_ratio", 6.0)))
+    f = spec.get("force", {})
+    world = World(name, law, float(f.get("gain_sigma_log", 0.0)), float(f.get("ripple", 0.0)),
+                  float(f.get("ripple_corr", 0.5)), wear)
+    return world, ScanArtefacts(**spec.get("scan", {}))
+
+
+def build_worlds(spec: dict) -> dict[str, tuple[World, ScanArtefacts]]:
+    """``matched`` (the tracker's own model), the configured worlds, and for the
+    ``realistic`` world one single-ingredient world per mismatch it contains."""
+    worlds = {"matched": (MATCHED, ScanArtefacts())}
+    for name, s in spec.items():
+        worlds[name] = make_world(name, s or {})
+    real = spec.get("realistic")
+    if real:
+        for key in ("pad", "force", "wear", "scan"):
+            if key in real:
+                worlds["only_" + key] = make_world("only_" + key, {key: real[key]})
+    return worlds

@@ -1,0 +1,158 @@
+{
+  "draws": [
+    200,
+    220
+  ],
+  "first_draw": 200,
+  "last_draw": 219,
+  "n_draws": 20,
+  "worlds": [
+    "matched",
+    "realistic"
+  ],
+  "criterion": "mean relative interval score of the 90% predictive interval of next-pass mean removal",
+  "by_value": [
+    {
+      "rate_drift": 0.0,
+      "mean_interval_score": 0.11044609377344108,
+      "worlds": {
+        "matched": {
+          "interval_score": 0.043860672785839286,
+          "coverage": 0.9184210526315789,
+          "relative_width": 0.03514062651358143,
+          "mean_rmse_C_over_oracle": 4.367510174121706,
+          "coverage_k_pad": 0.85
+        },
+        "realistic": {
+          "interval_score": 0.1770315147610429,
+          "coverage": 0.7052631578947368,
+          "relative_width": 0.07409395571397714,
+          "mean_rmse_C_over_oracle": 2.845640031865079,
+          "coverage_k_pad": 0.1
+        }
+      }
+    },
+    {
+      "rate_drift": 0.05,
+      "mean_interval_score": 0.09961515829205733,
+      "worlds": {
+        "matched": {
+          "interval_score": 0.04594962686339751,
+          "coverage": 0.9184210526315789,
+          "relative_width": 0.03725040985602647,
+          "mean_rmse_C_over_oracle": 4.379817109824633,
+          "coverage_k_pad": 0.85
+        },
+        "realistic": {
+          "interval_score": 0.15328068972071715,
+          "coverage": 0.7631578947368421,
+          "relative_width": 0.06898835245747682,
+          "mean_rmse_C_over_oracle": 2.702714355772983,
+          "coverage_k_pad": 0.1
+        }
+      }
+    },
+    {
+      "rate_drift": 0.1,
+      "mean_interval_score": 0.1031144053997855,
+      "worlds": {
+        "matched": {
+          "interval_score": 0.04878058231574377,
+          "coverage": 0.9263157894736842,
+          "relative_width": 0.04016412679591802,
+          "mean_rmse_C_over_oracle": 4.394252813555378,
+          "coverage_k_pad": 0.85
+        },
+        "realistic": {
+          "interval_score": 0.15744822848382722,
+          "coverage": 0.7973684210526316,
+          "relative_width": 0.07101283659717925,
+          "mean_rmse_C_over_oracle": 2.7593221239742753,
+          "coverage_k_pad": 0.1
+        }
+      }
+    },
+    {
+      "rate_drift": 0.15,
+      "mean_interval_score": 0.10585058788774879,
+      "worlds": {
+        "matched": {
+          "interval_score": 0.05055033414091737,
+          "coverage": 0.9315789473684211,
+          "relative_width": 0.04256381880121283,
+          "mean_rmse_C_over_oracle": 4.391202760902427,
+          "coverage_k_pad": 0.85
+        },
+        "realistic": {
+          "interval_score": 0.1611508416345802,
+          "coverage": 0.8078947368421052,
+          "relative_width": 0.07577619993252419,
+          "mean_rmse_C_over_oracle": 2.7938280337412236,
+          "coverage_k_pad": 0.1
+        }
+      }
+    },
+    {
+      "rate_drift": 0.2,
+      "mean_interval_score": 0.10905118387355635,
+      "worlds": {
+        "matched": {
+          "interval_score": 0.05270308968861571,
+          "coverage": 0.9368421052631579,
+          "relative_width": 0.04504639172570797,
+          "mean_rmse_C_over_oracle": 4.400248689901707,
+          "coverage_k_pad": 0.85
+        },
+        "realistic": {
+          "interval_score": 0.165399278058497,
+          "coverage": 0.8052631578947368,
+          "relative_width": 0.07940273905050868,
+          "mean_rmse_C_over_oracle": 2.838363582313272,
+          "coverage_k_pad": 0.1
+        }
+      }
+    }
+  ],
+  "chosen_rate_drift": 0.05,
+  "chosen_index": 1,
+  "chosen": {
+    "rate_drift": 0.05,
+    "mean_interval_score": 0.09961515829205733,
+    "worlds": {
+      "matched": {
+        "interval_score": 0.04594962686339751,
+        "coverage": 0.9184210526315789,
+        "relative_width": 0.03725040985602647,
+        "mean_rmse_C_over_oracle": 4.379817109824633,
+        "coverage_k_pad": 0.85
+      },
+      "realistic": {
+        "interval_score": 0.15328068972071715,
+        "coverage": 0.7631578947368421,
+        "relative_width": 0.06898835245747682,
+        "mean_rmse_C_over_oracle": 2.702714355772983,
+        "coverage_k_pad": 0.1
+      }
+    }
+  },
+  "constant_rate": {
+    "rate_drift": 0.0,
+    "mean_interval_score": 0.11044609377344108,
+    "worlds": {
+      "matched": {
+        "interval_score": 0.043860672785839286,
+        "coverage": 0.9184210526315789,
+        "relative_width": 0.03514062651358143,
+        "mean_rmse_C_over_oracle": 4.367510174121706,
+        "coverage_k_pad": 0.85
+      },
+      "realistic": {
+        "interval_score": 0.1770315147610429,
+        "coverage": 0.7052631578947368,
+        "relative_width": 0.07409395571397714,
+        "mean_rmse_C_over_oracle": 2.845640031865079,
+        "coverage_k_pad": 0.1
+      }
+    }
+  }
+}

@@ -41,6 +41,8 @@ def cmd_run(args) -> int:
     ctx = _ctx(args)
     out = Path(args.results)
     out.mkdir(parents=True, exist_ok=True)
+    drift = experiments.tuned_rate_drift(ctx, out, workers=args.workers)
+    print(f"[swt] wear-rate drift of the tracker: {drift:g}")
     experiments.experiment_main(ctx, out)
     plots.make_main(args.results, args.figures, ctx)
     return 0

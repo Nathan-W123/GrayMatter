@@ -87,3 +87,15 @@ def test_footprint_area_equals_the_pad_face(radius):
     (surface area projected onto the pad plane) must equal pi a^2."""
     cg = ContactGeometry(Panel(200.0, 150.0, radius, 1.0), np.array([[100.0, 75.0]]), 62.5)
     assert cg.footprint_area()[0] == pytest.approx(np.pi * 62.5**2, rel=0.005)
+
+
+@pytest.mark.parametrize("k_pad", [6.3e-4, 0.05, 5.0])
+@pytest.mark.parametrize("force", [20.0, 40.0])
+def test_foam_pad_force_balance_and_contact(small_ctx, force, k_pad):
+    """Foam law (stiffens as it densifies): the integrated pressure still equals the force,
+    and less of the pad face touches than for a linear pad of the same small-strain k."""
+    from swt.pad import PadLaw
+    cg = small_ctx.model.contact
+    foam = PadLaw("foam", 15.0)
+    assert np.allclose(cg.station_force(force, k_pad, foam), force, rtol=1e-9)
+    assert np.all(cg.contact_fraction(force, k_pad, foam) <= cg.contact_fraction(force, k_pad) + 1e-12)

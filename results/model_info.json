@@ -1,6 +1,7 @@
 {
   "grid_nodes": 30351,
   "scan_points": 7676,
+  "scan_grid_mm": 2.0,
   "panel_sag_mm": 9.526249034443708,
   "pad_rim_gap_mm": 6.582635142362449,
   "raster_lines": 11,
@@ -15,9 +16,9 @@
     "lam": 0.00025
   },
   "nominal_fresh_mean_removal_um": {
-    "20N": 8.039178378225756,
-    "30N": 12.0486923504259,
-    "40N": 16.059769580314548
+    "20N": 8.050933258198597,
+    "30N": 12.054424515767877,
+    "40N": 16.056460624598227
   },
   "pad_penetration_at_prior_bounds": {
     "20N": {
@@ -63,8 +64,186 @@
     "n_eta": 512,
     "eta_min_mm3": 3.9215686274509802,
     "eta_max_mm3": 64761.90476190481,
-    "max_relative_rms_error": 0.0002292765596141845,
-    "median_relative_rms_error": 2.172504315498777e-05,
-    "n_checks": 90
+    "wear_terms": 4,
+    "max_relative_rms_error": 0.0017036332825693002,
+    "median_relative_rms_error": 3.350748441614891e-05,
+    "n_checks": 90,
+    "max_lambda_times_pass_volume": 0.26498632621101953
+  },
+  "worlds": {
+    "matched": {
+      "pad_law": "linear",
+      "force_gain_sigma_log": 0.0,
+      "force_ripple": 0.0,
+      "ripple_corr": 0.5,
+      "wear_law": "single",
+      "scan_artefacts": {
+        "registration_sigma_mm": 0.0,
+        "profile_bias_um": 0.0,
+        "outlier_fraction": 0.0,
+        "outlier_um": 15.0,
+        "dropout_fraction": 0.0,
+        "dropout_gap_points": 8
+      }
+    },
+    "realistic": {
+      "pad_law": "foam",
+      "force_gain_sigma_log": 0.04,
+      "force_ripple": 0.03,
+      "ripple_corr": 0.5,
+      "wear_law": "two_stage",
+      "scan_artefacts": {
+        "registration_sigma_mm": 0.3,
+        "profile_bias_um": 0.5,
+        "outlier_fraction": 0.005,
+        "outlier_um": 15.0,
+        "dropout_fraction": 0.02,
+        "dropout_gap_points": 8
+      },
+      "foam": {
+        "thickness_mm": 15.0,
+        "at_max_force": {
+          "soft_k_low": {
+            "k_pad": 0.00063,
+            "force_N": 40.0,
+            "max_strain_foam": 0.35075982115968524,
+            "peak_pressure_ratio_foam_over_linear": 1.1904054723957784,
+            "contact_fraction_linear": 1.0,
+            "contact_fraction_foam": 0.9558667860923378
+          },
+          "mid": {
+            "k_pad": 0.05612486080160912,
+            "force_N": 40.0,
+            "max_strain_foam": 0.02064504539208838,
+            "peak_pressure_ratio_foam_over_linear": 1.0096013833678221,
+            "contact_fraction_linear": 0.2728605162446055,
+            "contact_fraction_foam": 0.2728605162446055
+          },
+          "stiff_k_high": {
+            "k_pad": 5.0,
+            "force_N": 40.0,
+            "max_strain_foam": 0.0010534573829485748,
+            "peak_pressure_ratio_foam_over_linear": 1.0005611407671493,
+            "contact_fraction_linear": 0.07124826968487909,
+            "contact_fraction_foam": 0.07124826968487909
+          }
+        }
+      },
+      "two_stage": {
+        "fast_fraction": 0.25,
+        "fast_ratio": 6.0,
+        "volume_to_half_K0_mm3": {
+          "single": 2772.588722239782,
+          "two_stage": 1765.8898226981767
+        },
+        "nominal_first_pass_volume_mm3": 243.7455126727809,
+        "K_over_K0_after_first_pass": {
+          "single": 0.940883098578072,
+          "two_stage": 0.8791042197474903
+        }
+      }
+    },
+    "only_pad": {
+      "pad_law": "foam",
+      "force_gain_sigma_log": 0.0,
+      "force_ripple": 0.0,
+      "ripple_corr": 0.5,
+      "wear_law": "single",
+      "scan_artefacts": {
+        "registration_sigma_mm": 0.0,
+        "profile_bias_um": 0.0,
+        "outlier_fraction": 0.0,
+        "outlier_um": 15.0,
+        "dropout_fraction": 0.0,
+        "dropout_gap_points": 8
+      },
+      "foam": {
+        "thickness_mm": 15.0,
+        "at_max_force": {
+          "soft_k_low": {
+            "k_pad": 0.00063,
+            "force_N": 40.0,
+            "max_strain_foam": 0.35075982115968524,
+            "peak_pressure_ratio_foam_over_linear": 1.1904054723957784,
+            "contact_fraction_linear": 1.0,
+            "contact_fraction_foam": 0.9558667860923378
+          },
+          "mid": {
+            "k_pad": 0.05612486080160912,
+            "force_N": 40.0,
+            "max_strain_foam": 0.02064504539208838,
+            "peak_pressure_ratio_foam_over_linear": 1.0096013833678221,
+            "contact_fraction_linear": 0.2728605162446055,
+            "contact_fraction_foam": 0.2728605162446055
+          },
+          "stiff_k_high": {
+            "k_pad": 5.0,
+            "force_N": 40.0,
+            "max_strain_foam": 0.0010534573829485748,
+            "peak_pressure_ratio_foam_over_linear": 1.0005611407671493,
+            "contact_fraction_linear": 0.07124826968487909,
+            "contact_fraction_foam": 0.07124826968487909
+          }
+        }
+      }
+    },
+    "only_force": {
+      "pad_law": "linear",
+      "force_gain_sigma_log": 0.04,
+      "force_ripple": 0.03,
+      "ripple_corr": 0.5,
+      "wear_law": "single",
+      "scan_artefacts": {
+        "registration_sigma_mm": 0.0,
+        "profile_bias_um": 0.0,
+        "outlier_fraction": 0.0,
+        "outlier_um": 15.0,
+        "dropout_fraction": 0.0,
+        "dropout_gap_points": 8
+      }
+    },
+    "only_wear": {
+      "pad_law": "linear",
+      "force_gain_sigma_log": 0.0,
+      "force_ripple": 0.0,
+      "ripple_corr": 0.5,
+      "wear_law": "two_stage",
+      "scan_artefacts": {
+        "registration_sigma_mm": 0.0,
+        "profile_bias_um": 0.0,
+        "outlier_fraction": 0.0,
+        "outlier_um": 15.0,
+        "dropout_fraction": 0.0,
+        "dropout_gap_points": 8
+      },
+      "two_stage": {
+        "fast_fraction": 0.25,
+        "fast_ratio": 6.0,
+        "volume_to_half_K0_mm3": {
+          "single": 2772.588722239782,
+          "two_stage": 1765.8898226981767
+        },
+        "nominal_first_pass_volume_mm3": 243.7455126727809,
+        "K_over_K0_after_first_pass": {
+          "single": 0.940883098578072,
+          "two_stage": 0.8791042197474903
+        }
+      }
+    },
+    "only_scan": {
+      "pad_law": "linear",
+      "force_gain_sigma_log": 0.0,
+      "force_ripple": 0.0,
+      "ripple_corr": 0.5,
+      "wear_law": "single",
+      "scan_artefacts": {
+        "registration_sigma_mm": 0.3,
+        "profile_bias_um": 0.5,
+        "outlier_fraction": 0.005,
+        "outlier_um": 15.0,
+        "dropout_fraction": 0.02,
+        "dropout_gap_points": 8
+      }
+    }
   }
 }

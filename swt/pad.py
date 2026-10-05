@@ -23,10 +23,42 @@ penetration and contact patch are functions of eta, and the pressure is
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 from scipy.optimize import brentq
 
 from .geometry import Panel
+
+
+@dataclass(frozen=True)
+class PadLaw:
+    """Pressure-indentation law of the pad.
+
+    ``linear``: Winkler, p = k * delta.
+    ``foam``:   p = k * delta / (1 - delta / h). Same small-strain stiffness k,
+                but the foam (thickness h) stiffens as it densifies. Used for
+                the "realistic" world; the tracker always assumes ``linear``.
+    """
+
+    kind: str = "linear"
+    thickness: float = 20.0   # mm, foam only
+
+    def pressure(self, k, delta):
+        delta = np.maximum(delta, 0.0)
+        if self.kind == "linear":
+            return k * delta
+        return k * delta / (1.0 - np.minimum(delta / self.thickness, 0.95))
+
+    def slope(self, k, delta):
+        """dp / d(delta)."""
+        if self.kind == "linear":
+            return np.where(delta > 0, k, 0.0)
+        x = np.minimum(np.maximum(delta, 0.0) / self.thickness, 0.95)
+        return np.where(delta > 0, k / (1.0 - x) ** 2, 0.0)
+
+
+LINEAR = PadLaw("linear")
 
 
 def solve_penetration(gap: np.ndarray, area: np.ndarray, force: float, k_pad: float) -> float:
@@ -149,39 +181,68 @@ class ContactGeometry:
             return self.gap[self.ptr[:-1]].copy()
         return self._solve(eta)[0]
 
-    def contact_points(self, force: float, k_pad: float) -> tuple[np.ndarray, np.ndarray]:
+    def contact_points(self, force: float, k_pad: float, law: PadLaw = LINEAR) -> tuple[np.ndarray, np.ndarray]:
         """Flat indices of footprint points in contact and their pressure [MPa].
 
         Points are sorted by gap within each station, so the contact set of a
-        station is a prefix of its segment.
+        station is a prefix of its segment. For a nonlinear law the force balance
+        is solved by Newton's method per station, started from the linear
+        solution: the foam is stiffer, so that is an upper bound on the root, and
+        the balance is convex in d, so the iteration descends monotonically.
         """
         if force <= 0:
             return np.zeros(0, dtype=np.int64), np.zeros(0)
         d, count = self._solve(force / k_pad)
         start = np.repeat(self.ptr[:-1] - (np.cumsum(count) - count), count)
         pts = np.arange(int(count.sum())) + start
-        p = k_pad * np.maximum(0.0, np.repeat(d, count) - self.gap[pts])
-        return pts, p
+        if law.kind == "linear":
+            p = k_pad * np.maximum(0.0, np.repeat(d, count) - self.gap[pts])
+            return pts, p
+        if law.kind != "foam":
+            raise ValueError(f"unknown pad law {law.kind!r}")
+        seg = np.cumsum(count) - count
+        st = np.repeat(np.arange(self.n_stations), count)
+        g, A = self.gap[pts], self.area[pts]
+        inv_h = 1.0 / law.thickness
+        for _ in range(100):
+            # foam law fused in place: p = k delta u, dp/d(delta) = k u^2, u = 1 / (1 - min(delta/h, 0.95))
+            delta = d[st]
+            delta -= g
+            np.maximum(delta, 0.0, out=delta)
+            u = delta * inv_h
+            np.minimum(u, 0.95, out=u)
+            np.subtract(1.0, u, out=u)
+            np.reciprocal(u, out=u)
+            Au = A * u
+            f = k_pad * np.add.reduceat(Au * delta, seg) - force
+            if np.max(np.abs(f)) < 1e-10 * force:
+                break
+            Au *= u
+            Au[delta <= 0] = 0.0
+            d = d - f / (k_pad * np.add.reduceat(Au, seg))
+        delta = d[st] - g
+        keep = delta > 0
+        return pts[keep], law.pressure(k_pad, delta[keep])
 
-    def pressure(self, force: float, k_pad: float) -> np.ndarray:
-        """Winkler pressure at every footprint point of every station [MPa]."""
-        if force <= 0:
-            return np.zeros_like(self.gap)
-        d = self.penetration(force / k_pad)
-        return k_pad * np.maximum(0.0, d[self.station_of_point] - self.gap)
+    def pressure(self, force: float, k_pad: float, law: PadLaw = LINEAR) -> np.ndarray:
+        """Pad pressure at every footprint point of every station [MPa]."""
+        out = np.zeros_like(self.gap)
+        pts, p = self.contact_points(force, k_pad, law)
+        out[pts] = p
+        return out
 
-    def station_force(self, force: float, k_pad: float) -> np.ndarray:
+    def station_force(self, force: float, k_pad: float, law: PadLaw = LINEAR) -> np.ndarray:
         """Integrated pressure per station [N] (should equal ``force``)."""
-        p = self.pressure(force, k_pad)
+        p = self.pressure(force, k_pad, law)
         return np.add.reduceat(p * self.area, self.ptr[:-1])
 
     def footprint_area(self) -> np.ndarray:
         """Discretised pad-face area over the part at every station [mm^2]."""
         return np.add.reduceat(self.area, self.ptr[:-1])
 
-    def contact_fraction(self, force: float, k_pad: float) -> np.ndarray:
+    def contact_fraction(self, force: float, k_pad: float, law: PadLaw = LINEAR) -> np.ndarray:
         """Fraction of the pad face (over the part) that is in contact, per station."""
-        p = self.pressure(force, k_pad)
+        p = self.pressure(force, k_pad, law)
         return np.add.reduceat(self.area * (p > 0), self.ptr[:-1]) / self.footprint_area()
 
     def accumulate(self, values: np.ndarray) -> np.ndarray:
@@ -190,7 +251,7 @@ class ContactGeometry:
 
 
 def contact_fraction_sweep(panel: Panel, pad_radius: float, force: float,
-                           k_values: np.ndarray) -> np.ndarray:
+                           k_values: np.ndarray, law: PadLaw = LINEAR) -> np.ndarray:
     """Contact fraction of a pad centred on the panel for a range of k_pad.
 
     The station is the panel centre, where the default panel fully supports
@@ -199,4 +260,4 @@ def contact_fraction_sweep(panel: Panel, pad_radius: float, force: float,
     centre = np.array([[round(panel.length_x / 2 / panel.grid) * panel.grid,
                         round(panel.width_y / 2 / panel.grid) * panel.grid]])
     cg = ContactGeometry(panel, centre, pad_radius)
-    return np.array([cg.contact_fraction(force, k)[0] for k in np.atleast_1d(k_values)])
+    return np.array([cg.contact_fraction(force, k, law)[0] for k in np.atleast_1d(k_values)])

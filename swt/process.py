@@ -36,13 +36,20 @@ abrasive has cut (the logic of the grinding "G-ratio"):
 
     K(W) = K0 * exp(-lambda * W),   W = cumulative removed volume [mm^3]
 
-Applied once per pass with a small multiplicative fluctuation (grain fracture,
-loading and batch variation are not deterministic):
+Wear acts continuously during a pass. Within a pass K follows the closed form
+K(U) = K_start / (1 + lambda * K_start * U), where U is the volume the pass would
+have removed at unit effectiveness so far; it is evaluated at the resolution of
+one raster line, using the exact line-average of K (so the volume of the removal
+map equals the volume that drives the wear). Between passes a small
+multiplicative fluctuation is applied (grain fracture, loading and batch
+variation are not deterministic):
 
     K_{n+1} = K_n * exp(-lambda * dV_n + sigma_w * xi_n),   xi_n ~ N(0, 1)
 
-Because dV_n is itself proportional to K_n, dull paper both cuts and wears
-more slowly: without noise K_n follows a hyperbolic decay in pass count.
+The "realistic" world can replace this law with a two-stage law (a fast
+break-in of the sharpest grit tips plus slow dulling), use a foam pad that
+stiffens as it densifies, and apply a force-calibration error; the tracker
+always assumes the single-stage law, a linear pad and the commanded force.
 """
 from __future__ import annotations
 
@@ -51,7 +58,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .geometry import Panel, RasterPath
-from .pad import ContactGeometry
+from .pad import LINEAR, ContactGeometry, PadLaw
 
 
 @dataclass
@@ -106,27 +113,79 @@ class ProcessModel:
         # v * dt for every footprint point at the reference spindle speed.
         self.vdt = sander.speed(self.contact.r) * path.dt[self.contact.station_of_point]
         self.node_area_flat = panel.node_area.ravel()
+        self.line_of_point = path.line[self.contact.station_of_point]
+        self.n_lines = int(path.line.max()) + 1
 
     def speed_scale(self, rpm: float) -> float:
         """Both sliding-speed components scale linearly with spindle speed."""
         return rpm / self.sander.spindle_rpm
 
-    def exposure(self, force: float, k_pad: float, rpm: float | None = None) -> np.ndarray:
-        """Exposure map E = sum p v dt [N/mm] (flat, n_pix)."""
+    def line_exposures(self, force: float, k_pad: float, rpm: float | None = None,
+                       law: PadLaw = LINEAR) -> tuple[np.ndarray, np.ndarray]:
+        """Exposure map of every raster line, (n_lines, n_pix) [N/mm], and each line's
+        removed volume per unit effectiveness [mm^3 per (mm^2/N)]."""
+        n = self.panel.n_pix
+        if force <= 0:
+            return np.zeros((self.n_lines, n)), np.zeros(self.n_lines)
+        pts, p = self.contact.contact_points(force, k_pad, law)
+        scale = 1.0 if rpm is None else self.speed_scale(rpm)
+        flat = self.line_of_point[pts] * n + self.contact.idx[pts]
+        E = scale * np.bincount(flat, weights=p * self.vdt[pts], minlength=self.n_lines * n)
+        E = E.reshape(self.n_lines, n)
+        return E, E @ self.node_area_flat
+
+    def exposure(self, force: float, k_pad: float, rpm: float | None = None,
+                 law: PadLaw = LINEAR) -> np.ndarray:
+        """Exposure map E = sum p v dt [N/mm] (flat, n_pix): removal at constant K is K * E."""
         if force <= 0:
             return np.zeros(self.panel.n_pix)
-        pts, p = self.contact.contact_points(force, k_pad)
+        pts, p = self.contact.contact_points(force, k_pad, law)
         scale = 1.0 if rpm is None else self.speed_scale(rpm)
         return scale * np.bincount(self.contact.idx[pts], weights=p * self.vdt[pts],
                                    minlength=self.panel.n_pix)
 
     def removal(self, force: float, k_pad: float, K: float, rpm: float | None = None) -> np.ndarray:
-        """Removal depth map for one pass [mm] (flat, n_pix)."""
+        """Removal depth map at constant effectiveness K [mm] (flat, n_pix)."""
         return K * self.exposure(force, k_pad, rpm)
 
     def volume(self, removal_flat: np.ndarray) -> float:
         """Removed volume [mm^3]."""
         return float(removal_flat @ self.node_area_flat)
+
+
+def line_effectiveness(K_start: float, lam: float, u_lines: np.ndarray, wear: "WearLaw" = None,
+                       K0: float | None = None, W_start: float = 0.0, fluct: float = 1.0) -> np.ndarray:
+    """Line-averaged effectiveness during a pass in which K wears continuously.
+
+    Single-stage law: exact closed form, K(U) = K_start / (1 + lam K_start U).
+    Two-stage law: dW/dU = K(W) integrated with RK4 (8 sub-steps per line).
+    Each line's value is (volume removed by the line) / u_line, so the removal
+    map's volume equals the volume that drives the wear.
+    """
+    u = np.asarray(u_lines, dtype=float)
+    if lam == 0:
+        return np.full(u.size, K_start)
+    if wear is None or wear.kind == "single":
+        U_end = np.cumsum(u)
+        U_start = U_end - u
+        dW = (np.log1p(lam * K_start * U_end) - np.log1p(lam * K_start * U_start)) / lam
+        return np.divide(dW, u, out=np.full(u.size, K_start), where=u > 0)
+    W = W_start
+    out = np.empty(u.size)
+
+    def rate(w):
+        return K0 * fluct * wear.phi(lam, w)
+
+    for i, ul in enumerate(u):
+        W0, h = W, ul / 8.0
+        for _ in range(8):
+            k1 = rate(W)
+            k2 = rate(W + 0.5 * h * k1)
+            k3 = rate(W + 0.5 * h * k2)
+            k4 = rate(W + h * k3)
+            W += h * (k1 + 2 * k2 + 2 * k3 + k4) / 6.0
+        out[i] = (W - W0) / ul if ul > 0 else rate(W)
+    return out
 
 
 # --------------------------------------------------------------------------- priors / truth
@@ -165,11 +224,46 @@ class Priors:
         }
 
 
+@dataclass(frozen=True)
+class WearLaw:
+    """K / K0 as a function of cumulative removed volume W (without the fluctuation).
+
+    single:    exp(-lam W)
+    two_stage: (1 - f) exp(-lam W) + f exp(-r lam W)   (fast break-in of a fraction f)
+    """
+
+    kind: str = "single"
+    fast_fraction: float = 0.25
+    fast_ratio: float = 6.0
+
+    def phi(self, lam: float, W: float) -> float:
+        if self.kind == "single":
+            return float(np.exp(-lam * W))
+        f, r = self.fast_fraction, self.fast_ratio
+        return float((1 - f) * np.exp(-lam * W) + f * np.exp(-r * lam * W))
+
+
+@dataclass(frozen=True)
+class World:
+    """How the hidden process differs from the tracker's model ("matched" = not at all)."""
+
+    name: str = "matched"
+    pad_law: PadLaw = LINEAR
+    force_gain_sigma: float = 0.0       # log-sd of the run's force-calibration error
+    force_ripple: float = 0.0           # relative s.d. of the force of each raster line (force-control ripple)
+    ripple_corr: float = 0.5            # correlation of the ripple between consecutive lines
+    wear: WearLaw = WearLaw()
+
+
+MATCHED = World()
+
+
 @dataclass
 class HiddenTruth:
     k_pad: float
     K0: float
     lam: float
+    force_gain: float = 1.0             # actual force = gain * commanded force
 
 
 @dataclass
@@ -177,11 +271,13 @@ class TruthTrajectory:
     """What actually happened (hidden from the estimators)."""
 
     truth: HiddenTruth
-    K: np.ndarray                  # effectiveness during each scanned pass
+    K: np.ndarray                  # effectiveness at the start of each scanned pass
     removal: np.ndarray            # (n_passes, n_pix) true removal maps [mm]
     volume: np.ndarray             # removed volume per scanned pass [mm^3]
-    crossing_pass: int | None      # first pass (1-based) with K < tau*K0
+    crossing_pass: int | None      # first pass (1-based) whose starting K < tau*K0
     K_extended: np.ndarray = field(repr=False, default=None)  # K beyond the scanned passes
+    oracle: np.ndarray = field(repr=False, default=None)      # (n_passes, n_pix) oracle predictions
+    world: World = MATCHED
 
 
 def action_at(schedule: list[PassAction], i: int) -> PassAction:
@@ -204,38 +300,80 @@ def cycle_length(schedule: list[PassAction]) -> int:
 
 def simulate_truth(model: ProcessModel, truth: HiddenTruth, schedule: list[PassAction],
                    wear_sigma: float, rng: np.random.Generator, threshold: float = 0.5,
-                   max_extend: int = 400) -> TruthTrajectory:
+                   max_extend: int = 400, world: World = MATCHED,
+                   ripple_rng: np.random.Generator | None = None) -> TruthTrajectory:
     """Run the hidden process for the scheduled passes.
 
-    The wear trajectory is continued past the last scanned pass (repeating the
-    schedule's force cycle) until the threshold crossing, so the true change
-    point is defined even when it falls after the experiment ends.
-    """
-    cache: dict[tuple[float, float], np.ndarray] = {}
+    The state is the cumulative removed volume W and the accumulated log
+    fluctuation eps; the effectiveness at the start of a pass is
+    K = K0 * phi(W) * exp(eps). The trajectory continues past the last scanned
+    pass (repeating the schedule's force cycle) until the threshold crossing.
+    The oracle prediction for pass n uses the true physics and the true state
+    at the start of pass n-1, but not the fluctuation drawn after it, nor the
+    force ripple of pass n.
 
-    def exposure(a: PassAction) -> np.ndarray:
+    Force ripple (``world.force_ripple`` > 0): raster line l of a pass runs at
+    force F (1 + e_l), with e_l an AR(1) sequence along the pass. Its effect on
+    the line exposures is applied to first order, using the derivative of the
+    exact exposures with respect to the force (relative error ~ e_l^2).
+    """
+    cache: dict[tuple[float, float], tuple] = {}
+    h = 0.05
+
+    def lines(a: PassAction):
         key = (a.force, a.rpm)
         if key not in cache:
-            cache[key] = model.exposure(a.force, truth.k_pad, a.rpm)
+            F = truth.force_gain * a.force
+            E, u = model.line_exposures(F, truth.k_pad, a.rpm, world.pad_law)
+            if world.force_ripple > 0:
+                E2, u2 = model.line_exposures(F * (1 + h), truth.k_pad, a.rpm, world.pad_law)
+                cache[key] = (E, u, (E2 - E) / h, (u2 - u) / h)
+            else:
+                cache[key] = (E, u, None, None)
         return cache[key]
 
+    def ripple() -> np.ndarray | None:
+        if world.force_ripple <= 0:
+            return None
+        r, e = world.ripple_corr, np.empty(model.n_lines)
+        xi = ripple_rng.standard_normal(model.n_lines)
+        e[0] = xi[0]
+        for i in range(1, model.n_lines):
+            e[i] = r * e[i - 1] + np.sqrt(1 - r * r) * xi[i]
+        return world.force_ripple * e
+
+    def run_pass(a: PassAction, W: float, fluct: float, e: np.ndarray | None = None):
+        E, u, dE, du = lines(a)
+        if e is not None:
+            E = E + e[:, None] * dE
+            u = u + e * du
+        K_start = truth.K0 * world.wear.phi(truth.lam, W) * fluct
+        K_l = line_effectiveness(K_start, truth.lam, u, world.wear, truth.K0, W, fluct)
+        return K_start, K_l @ E, float(K_l @ u)
+
     n = len(schedule)
-    K = truth.K0
-    Ks, maps, vols, K_ext = [], [], [], []
+    W, eps = 0.0, 0.0
+    Ks, maps, vols, K_ext, oracle = [], [], [], [], []
     crossing = None
+    eps_prev = None
     for i in range(n + max_extend):
+        K = truth.K0 * world.wear.phi(truth.lam, W) * np.exp(eps)
         if crossing is None and K < threshold * truth.K0:
             crossing = i + 1
         K_ext.append(K)
         if i >= n and crossing is not None:
             break
         a = action_at(schedule, i)
-        E = exposure(a)
-        dV = K * float(E @ model.node_area_flat)
+        K_start, removal, dV = run_pass(a, W, np.exp(eps), ripple())
         if i < n:
-            Ks.append(K)
-            maps.append(K * E)
+            Ks.append(K_start)
+            maps.append(removal)
             vols.append(dV)
-        K = float(wear_step(K, truth.lam, dV, wear_sigma * rng.standard_normal()))
+            # oracle: the true state at the start of the previous pass, without the fluctuation
+            # drawn after it, and without this pass's force ripple (pass 1: the true initial state)
+            oracle.append(run_pass(a, W, np.exp(eps if i == 0 else eps_prev))[1])
+        eps_prev = eps
+        W += dV
+        eps += wear_sigma * rng.standard_normal()
     return TruthTrajectory(truth, np.array(Ks), np.array(maps), np.array(vols), crossing,
-                           np.array(K_ext))
+                           np.array(K_ext), np.array(oracle), world)

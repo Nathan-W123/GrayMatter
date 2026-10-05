@@ -4,10 +4,24 @@ import numpy as np
 import pytest
 
 from swt.config import rng_for
-from swt.estimators import (CalibrateOnce, Nominal, ParticleFilter, PFConfig, least_squares_fit,
+from swt.estimators import (CalibrateOnce, Nominal, ParticleFilter, RefitEachPass, least_squares_fit,
                             systematic_resample, weighted_quantiles)
 from swt.process import HiddenTruth, PassAction, simulate_truth
-from swt.scan import Scanner
+from swt.scan import ScanArtefacts, Scanner
+
+
+def _pf(ctx, seed, **changes):
+    cfg = dataclasses.replace(ctx.pf, **changes)
+    return ParticleFilter(ctx.table, ctx.priors, cfg, rng_for(7, seed), obs_shape=ctx.obs_shape)
+
+
+def _track(ctx, pf, traj, scanner, rng, noise_um, passes=None):
+    sched = ctx.schedule()
+    for n, a in enumerate(sched[:passes]):
+        if n:
+            pf.advance(sched[n - 1])
+        pf.update(scanner.observe(traj.removal[n], rng), a, noise_um)
+    return pf
 
 
 def test_systematic_resampling_counts(rng):
@@ -48,67 +62,85 @@ def test_particle_filter_recovers_truth_without_noise(small_ctx, seed):
     C recovers k_pad, lambda, K0 and the current K within 5%."""
     p = small_ctx.priors.sample(rng_for(1234, seed))
     truth = HiddenTruth(float(p["k_pad"]), float(p["K0"]), float(p["lam"]))
-    sched = small_ctx.schedule()
-    traj = simulate_truth(small_ctx.model, truth, sched, 0.0, np.random.default_rng(0))
+    traj = simulate_truth(small_ctx.model, truth, small_ctx.schedule(), 0.0, np.random.default_rng(0))
     sc = Scanner(small_ctx.panel, 0.0, small_ctx.cfg["scan"]["stride"])
-    pf = ParticleFilter(small_ctx.table, small_ctx.priors, small_ctx.pf, rng_for(7, seed))
-    for n, a in enumerate(sched):
-        if n:
-            pf.advance(sched[n - 1])
-        pf.update(sc.observe(traj.removal[n], None), a, 0.0)
-    s = pf.summary()
+    s = _track(small_ctx, _pf(small_ctx, seed), traj, sc, None, 0.0).summary()
     for name, true in (("k_pad", truth.k_pad), ("lam", truth.lam), ("K0", truth.K0), ("K", traj.K[-1])):
         assert s[name]["mean"] == pytest.approx(true, rel=0.05), name
         assert s[name]["median"] == pytest.approx(true, rel=0.05), name
 
 
 def test_baselines_behave_as_specified(small_ctx):
-    """A never changes its parameters; B freezes after the first scan."""
-    m, tab, pr = small_ctx.model, small_ctx.table, small_ctx.priors
+    """A never changes its parameters; B freezes after the first scan; D refits every scan."""
+    m, tab, pr, oi = small_ctx.model, small_ctx.table, small_ctx.priors, small_ctx.obs_index
     sched = small_ctx.schedule()
-    A, B = Nominal(m, pr), CalibrateOnce(m, pr, tab)
+    A, B, D = Nominal(m, pr, oi), CalibrateOnce(m, pr, tab, oi), RefitEachPass(pr, tab)
     sc = Scanner(small_ctx.panel, 2.0, 2)
     traj = simulate_truth(m, HiddenTruth(0.05, 6e-5, 2.5e-4), sched, 0.01, np.random.default_rng(3))
     rng = np.random.default_rng(4)
-    k_after_first = None
+    after_first, D_K = None, []
     for n, a in enumerate(sched[:6]):
         if n:
-            A.advance(sched[n - 1])
-            B.advance(sched[n - 1])
+            for e in (A, B, D):
+                e.advance(sched[n - 1])
         y = sc.observe(traj.removal[n], rng)
-        A.update(y, a)
-        B.update(y, a)
+        for e in (A, B, D):
+            e.update(y, a)
         if n == 0:
-            k_after_first = (B.k_pad, B.K)
-    assert (B.k_pad, B.K) == k_after_first
+            after_first = (B.k_pad, B.K)
+        D_K.append(D.K)
+    assert (B.k_pad, B.K) == after_first
     assert A.k_pad == pr.log_mean()["k_pad"] and A.lam == pr.lam_median
     assert A.K < A.K0   # nominal wear model is propagated
+    assert len(set(D_K)) == 6 and D_K[-1] < D_K[0]
+    for e in (A, B, D):
+        assert e.predict(sched[0]).shape == oi.shape
 
 
-def test_surrogate_sse_matches_brute_force(small_ctx, rng):
-    """The O(1) Gram-matrix likelihood equals the direct sum of squares."""
-    tab = small_ctx.table
-    y = rng.normal(0.01, 0.002, tab.obs.shape[0])
-    ym, yy = tab.scan_terms(y)
-    eta = np.exp(rng.uniform(np.log(tab.eta[0]), np.log(tab.eta[-1]), 25))
-    a = rng.uniform(0.5, 2.0, 25) * 1e-3
-    fast = tab.sse(eta, a, ym, yy)
-    for i in range(25):
-        m = tab.map_full(eta[i])[tab.obs_index]
-        assert fast[i] == pytest.approx(np.sum((y - a[i] * m) ** 2), rel=1e-9)
+def test_refit_baseline_recovers_the_wear_rate(small_ctx):
+    """Noise-free, single-stage truth: D's log-linear fit of the per-scan K against removed
+    volume recovers lambda, and its crossing forecast is close to the truth."""
+    truth = HiddenTruth(0.05, 6e-5, 3e-4)
+    sched = small_ctx.schedule()
+    traj = simulate_truth(small_ctx.model, truth, sched, 0.0, np.random.default_rng(0), small_ctx.threshold)
+    D = RefitEachPass(small_ctx.priors, small_ctx.table)
+    sc = Scanner(small_ctx.panel, 0.0, small_ctx.cfg["scan"]["stride"])
+    for n, a in enumerate(sched[:6]):
+        D.update(sc.observe(traj.removal[n], None), a)
+    assert D.lam == pytest.approx(truth.lam, rel=0.03)
+    assert abs(D.crossing_pass(6, sched, small_ctx.threshold) - traj.crossing_pass) <= 1
+
+
+def test_mh_moves_leave_the_prior_invariant(small_ctx):
+    """With no scan information (tempering exponent 0) the rejuvenation moves must keep
+    the prior: log k uniform on its bounds, log lambda and log K0 Gaussian."""
+    pf = _pf(small_ctx, 3, n_particles=6000)
+    pr = small_ctx.priors
+    pf.F[0], pf.s[0], pf.sigma2[0] = 30.0, 1.0, 1.0
+    pf.stats[0] = small_ctx.table.scan_stats(np.zeros(small_ctx.obs_index.size))
+    pf.LL[:, 0] = pf._loglik(0, pf.lk, pf.lpath[:, 0], pf.path[:, 0])
+    for _ in range(25):
+        pf._mh_sweep(0, 0.0)
+    lo, hi = np.log(pr.k_low), np.log(pr.k_high)
+    assert np.mean(pf.lk) == pytest.approx(0.5 * (lo + hi), abs=0.08)
+    assert np.std(pf.lk) == pytest.approx((hi - lo) / np.sqrt(12), rel=0.05)
+    assert np.mean(pf.lpath[:, 0]) == pytest.approx(np.log(pr.lam_median), abs=0.02)
+    assert np.std(pf.lpath[:, 0]) == pytest.approx(pr.lam_sigma_log, rel=0.06)
+    assert np.mean(pf.path[:, 0]) == pytest.approx(np.log(pr.K0_median), abs=0.02)
+    assert np.std(pf.path[:, 0]) == pytest.approx(pr.K0_sigma_log, rel=0.06)
 
 
 def test_crossing_prediction_before_and_after_threshold(small_ctx):
-    """Noise-free truth: C predicts the exact crossing pass ahead of time and, once past
-    it, reports the pass at which it happened (not the current pass). The truth sits
-    clearly on either side of the threshold around the crossing, so no slack is needed."""
-    truth = HiddenTruth(k_pad=0.05, K0=6e-5, lam=2.8e-4)
+    """Noise-free truth: once the wear rate is learned, C predicts the exact crossing pass
+    ahead of time (inside its band) and, once past it, reports the pass at which it
+    happened (not the current pass)."""
+    truth = HiddenTruth(k_pad=0.05, K0=6e-5, lam=2.9e-4)
     sched = small_ctx.schedule()
     traj = simulate_truth(small_ctx.model, truth, sched, 0.0, np.random.default_rng(0))
     tc = traj.crossing_pass
-    assert 4 <= tc <= 18
+    assert 6 <= tc <= 18
     sc = Scanner(small_ctx.panel, 0.0, small_ctx.cfg["scan"]["stride"])
-    pf = ParticleFilter(small_ctx.table, small_ctx.priors, small_ctx.pf, rng_for(11, 0))
+    pf = _pf(small_ctx, 11)
     preds = {}
     for n, a in enumerate(sched):
         if n:
@@ -118,42 +150,100 @@ def test_crossing_prediction_before_and_after_threshold(small_ctx):
     k_ratio = traj.K / truth.K0
     assert k_ratio[tc - 2] > 0.51 and k_ratio[tc - 1] < 0.49  # margin around the threshold
     for p in range(3, tc):                      # predictions made before the crossing
-        assert preds[p]["median"] == tc
         assert preds[p]["lo"] <= tc <= preds[p]["hi"]
+        assert abs(preds[p]["median"] - tc) <= (1 if p < tc - 2 else 0)
     for p in range(tc, len(sched) + 1):         # after it: the crossing is remembered
         assert preds[p]["median"] == tc
 
 
 def test_particle_filter_wear_step_uses_each_particles_own_removed_volume(small_ctx):
-    """advance(): log K drops by lambda times the exact removed volume of that particle."""
+    """advance(): K at the next pass = K / (1 + lambda K U), U = that particle's removed
+    volume per unit effectiveness (exact within-pass wear of the single-stage law)."""
     m, pr = small_ctx.model, small_ctx.priors
-    cfg = dataclasses.replace(small_ctx.pf, wear_sigma=0.0, n_particles=4)
-    pf = ParticleFilter(small_ctx.table, pr, cfg, rng_for(0, 0))
+    pf = _pf(small_ctx, 0, wear_sigma=1e-12, rate_drift=0.0, adaptive_wear_noise=False, n_particles=4)
     ks = np.array([pr.k_low * 1.01, 0.01, 0.3, pr.k_high * 0.99])
     Ks = np.array([6e-5, 5e-5, 4e-5, 7e-5])
     lams = np.array([2e-4, 3e-4, 2.5e-4, 4e-4])
-    pf.X = np.column_stack([np.log(ks), np.log(Ks * 1.2), np.log(lams), np.log(Ks)])
+    pf.lk, pf.path[:, 0], pf.lpath[:, 0] = np.log(ks), np.log(Ks), np.log(lams)
     a = PassAction(40.0, 8000.0)
     pf.advance(a)
-    exact = np.array([m.volume(m.removal(a.force, k, K)) for k, K in zip(ks, Ks)])
-    assert np.allclose(np.exp(pf.X[:, 3]), Ks * np.exp(-lams * exact), rtol=1e-4)
+    U = np.array([m.volume(m.removal(a.force, k, 1.0)) for k in ks])
+    assert np.allclose(np.exp(pf.path[:, 1]), Ks / (1 + lams * Ks * U), rtol=1e-4)
+    assert np.allclose(pf.lpath[:, 1], pf.lpath[:, 0])          # no drift when rate_drift = 0
 
 
 def test_credible_interval_width_matches_analytic_posterior(small_cfg):
-    """With stiffness pinned by a very narrow prior, the posterior of K after one scan is
-    Gaussian with sd = sigma / ||m_obs||: the reported 90% interval must match it."""
+    """With stiffness and wear rate pinned by very narrow priors, the posterior of K after
+    one scan is Gaussian with sd = sigma / ||d map / d K||: the 90% interval must match."""
     from swt.config import build_context, deep_update
-    ctx = build_context(deep_update(small_cfg, {"priors": {"k_low": 0.05, "k_high": 0.050001}}))
+    ctx = build_context(deep_update(small_cfg, {"priors": {"k_low": 0.05, "k_high": 0.050001,
+                                                           "lam_sigma_log": 1e-6}}))
     sc = Scanner(ctx.panel, 2.0, ctx.cfg["scan"]["stride"])
-    a, K_true = PassAction(30.0, 8000.0), 6e-5
-    m_obs = ctx.model.exposure(a.force, 0.05)[sc.obs_index]
-    sd_K = 2e-3 / np.sqrt(m_obs @ m_obs)        # removal = K * exposure, noise sigma = 2 um
+    a, K_true, lam = PassAction(30.0, 8000.0), 6e-5, ctx.priors.lam_median
+    from swt.process import line_effectiveness
+    E, u = ctx.model.line_exposures(a.force, 0.05)
+
+    def removal(K):
+        return line_effectiveness(K, lam, u) @ E
+
+    h = 1e-4
+    dm = (removal(K_true * (1 + h)) - removal(K_true * (1 - h)))[sc.obs_index] / (2 * h * K_true)
+    sd_K = 2e-3 / np.sqrt(dm @ dm)                 # noise sigma = 2 um
     ratios, inside = [], 0
     for seed in range(8):
-        pf = ParticleFilter(ctx.table, ctx.priors, ctx.pf, rng_for(50, seed))
-        pf.update(sc.observe(ctx.model.removal(a.force, 0.05, K_true), np.random.default_rng(seed)), a, 2.0)
+        pf = ParticleFilter(ctx.table, ctx.priors, ctx.pf, rng_for(50, seed), obs_shape=ctx.obs_shape)
+        pf.update(sc.observe(removal(K_true), np.random.default_rng(seed)), a, 2.0)
         s = pf.summary()["K"]
         ratios.append((s["hi"] - s["lo"]) / (2 * 1.6449 * sd_K))
         inside += s["lo"] <= K_true <= s["hi"]
     assert 0.85 < np.median(ratios) < 1.15
     assert inside >= 5
+
+
+def test_innovation_gating_rejects_spikes_but_not_sharp_maps(small_ctx):
+    """A stiff pad gives sharp removal stripes: no genuine point may be rejected. Spikes
+    injected into a later scan are rejected and do not move the estimate of K."""
+    truth = HiddenTruth(0.5, 6e-5, 2.5e-4)
+    sched = small_ctx.schedule()
+    traj = simulate_truth(small_ctx.model, truth, sched, 0.0, np.random.default_rng(0))
+    sc = Scanner(small_ctx.panel, 2.0, small_ctx.cfg["scan"]["stride"])
+    clean = _track(small_ctx, _pf(small_ctx, 1), traj, sc, np.random.default_rng(5), 2.0, passes=3)
+    assert clean.last_outliers <= 2
+    y_rng = np.random.default_rng(5)
+    spiky = _pf(small_ctx, 1)
+    spikes = np.random.default_rng(9).choice(small_ctx.obs_index.size, 25, replace=False)
+    for n, a in enumerate(sched[:3]):
+        if n:
+            spiky.advance(sched[n - 1])
+        y = sc.observe(traj.removal[n], y_rng)
+        if n == 2:
+            y[spikes] += 0.03                       # 30 um spikes
+        spiky.update(y, a, 2.0)
+    assert spiky.last_outliers >= 25
+    assert spiky.summary()["K"]["median"] == pytest.approx(clean.summary()["K"]["median"], rel=2e-3)
+
+
+def test_profile_offsets_are_estimated_only_when_present(small_ctx):
+    truth = HiddenTruth(0.02, 6e-5, 2.5e-4)
+    traj = simulate_truth(small_ctx.model, truth, small_ctx.schedule(), 0.0, np.random.default_rng(0))
+    plain = Scanner(small_ctx.panel, 2.0, small_ctx.cfg["scan"]["stride"])
+    biased = Scanner(small_ctx.panel, 2.0, small_ctx.cfg["scan"]["stride"], ScanArtefacts(profile_bias_um=1.0))
+    pf = _track(small_ctx, _pf(small_ctx, 2), traj, plain, np.random.default_rng(1), 2.0, passes=4)
+    assert pf.summary()["profile_sd_um"] == 0.0
+    pf = _track(small_ctx, _pf(small_ctx, 2), traj, biased, np.random.default_rng(1), 2.0, passes=4)
+    assert pf.summary()["profile_sd_um"] == pytest.approx(1.0, rel=0.35)
+    assert pf.summary()["sigma_um"] == pytest.approx(2.0, rel=0.1)
+
+
+def test_adaptive_wear_noise_grows_only_when_forecasts_miss(small_ctx):
+    """Matched truth (1% fluctuation): the process-noise estimate stays near 1%. A truth whose
+    K fluctuates 4% per pass: the estimate rises well above 1%."""
+    sched = small_ctx.schedule()
+    sc = Scanner(small_ctx.panel, 2.0, small_ctx.cfg["scan"]["stride"])
+    out = {}
+    for sw in (0.01, 0.04):
+        traj = simulate_truth(small_ctx.model, HiddenTruth(0.05, 6e-5, 2.0e-4), sched, sw,
+                              np.random.default_rng(2))
+        out[sw] = _track(small_ctx, _pf(small_ctx, 4), traj, sc, np.random.default_rng(3), 2.0).wear_noise()
+    assert out[0.01] < 0.015
+    assert out[0.04] > 0.025

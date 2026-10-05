@@ -24,5 +24,11 @@
     "stiff_k_high": 0.05847056606272381,
     "force_N": 30.0
   },
+  "foam_pad_at_prior_bounds": {
+    "thickness_mm": 15.0,
+    "soft_k_low": 0.9138506636267405,
+    "stiff_k_high": 0.05089162120348506,
+    "force_N": 30.0
+  },
   "pad_face_area_mm2": 12271.846303085129
 }
