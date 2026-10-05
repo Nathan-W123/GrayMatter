@@ -193,7 +193,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
                 row[f"C_{name}_{stat}"] = s[name][stat]
         row.update({
             "C_corr_logk_logK": s["corr_logk_logK"], "C_stages": s["stages"],
-            "C_sigma_um": s["sigma_um"], "C_profile_sd_um": s["profile_sd_um"], "C_wear_noise": s["wear_noise"], "C_min_path_diversity": s["min_path_diversity"], "C_outliers": s["outliers"], "C_redone": bool(s["redone"]),
+            "C_sigma_um": s["sigma_um"], "C_profile_sd_um": s["profile_sd_um"], "C_wear_noise": s["wear_noise"], "C_transient_noise": s["transient_noise"], "C_min_path_diversity": s["min_path_diversity"], "C_outliers": s["outliers"], "C_redone": bool(s["redone"]),
             "B_k_pad": B.k_pad if full else nan, "B_K": B.K if full else nan,
             "D_k_pad": D.k_pad if full else nan, "D_K": D.K if full else nan, "D_lam": D.lam if full else nan,
             "cross_C_median": cr["median"], "cross_C_lo": cr["lo"], "cross_C_hi": cr["hi"],
@@ -632,16 +632,21 @@ def task_list(ctx: Context) -> list[tuple]:
     e = ctx.cfg["experiments"]
     n = int(e["robustness_draws"])
     tasks = [("robustness", w, d) for w in e["robustness_worlds"] for d in range(n)]
-    if e.get("validation_world") in ctx.worlds:
-        tasks += [("robustness", e["validation_world"], d) for d in range(int(e.get("validation_draws", n)))]
+    for w in validation_worlds(ctx):
+        tasks += [("robustness", w, d) for d in range(int(e.get("validation_draws", n)))]
     nb = int(e.get("breakdown_draws", 0))
     tasks += [("breakdown", w, d) for d in range(nb) for w in breakdown_extra_worlds(ctx)]
     return tasks
 
 
+def validation_worlds(ctx: Context) -> list[str]:
+    """The pre-registered mismatch worlds (robustness runs only, never tuned on)."""
+    return [w for w in ctx.cfg["experiments"].get("validation_worlds", []) if w in ctx.worlds]
+
+
 def breakdown_extra_worlds(ctx: Context) -> list[str]:
     """Worlds run only for the breakdown: one per mismatch group, plus stress tests."""
-    skip = set(ctx.cfg["experiments"]["robustness_worlds"]) | {ctx.cfg["experiments"].get("validation_world")}
+    skip = set(ctx.cfg["experiments"]["robustness_worlds"]) | set(validation_worlds(ctx))
     return [w for w in ctx.worlds if w not in skip and w != "matched"]
 
 
@@ -894,11 +899,8 @@ def _world_robustness(ctx: Context, rows: list[dict]) -> dict:
 
 def robust_worlds(ctx: Context) -> list[str]:
     """Worlds with full robustness runs: the configured ones plus the validation world."""
-    e = ctx.cfg["experiments"]
-    worlds = list(e["robustness_worlds"])
-    if e.get("validation_world") in ctx.worlds and e["validation_world"] not in worlds:
-        worlds.append(e["validation_world"])
-    return worlds
+    worlds = list(ctx.cfg["experiments"]["robustness_worlds"])
+    return worlds + [w for w in validation_worlds(ctx) if w not in worlds]
 
 
 def experiment_robustness(ctx: Context, out: Path, runs: dict, verbose: bool = True) -> dict:

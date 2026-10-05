@@ -57,6 +57,7 @@ filter:
                                   # 'auto' = chosen by the tuning experiment on held-out draws
   rate_drift_fallback: 0.1        # used by stand-alone runs before any tuning exists
   wear_noise_range: [0.005, 0.05] # log-uniform prior of the wear-fluctuation s.d. the tracker learns
+  transient_range: [0.002, 0.05]  # log-uniform prior of the s.d. of a per-pass gain that does not persist
   force_exponent_sd: 0.15         # prior s.d. of beta in removal ~ F^beta (Preston: beta = 1)
   sigma_floor_um: 0.05
   surrogate_n_eta: 512
@@ -106,6 +107,22 @@ worlds:
       dropout_gap_points: 12
       texture_um: 1.5
       texture_corr_mm: 1.5
+  # A third mismatch world, committed together with the frozen tracker C (the ParticleFilter
+  # class does not change after this commit) before any of its results were computed.
+  realistic_c:
+    pad: {kind: foam, thickness_mm: 20.0}
+    removal: {preston_exponent: 0.85}
+    force: {gain_sigma_log: 0.03, ripple: 0.04, ripple_corr: 0.3}
+    wear: {kind: two_stage, fast_fraction: 0.15, fast_ratio: 8.0, rings: 2}
+    scan:
+      registration_sigma_mm: 0.2
+      profile_bias_um: 0.3
+      outlier_fraction: 0.01
+      outlier_um: 10.0
+      dropout_fraction: 0.03
+      dropout_gap_points: 6
+      texture_um: 0.8
+      texture_corr_mm: 1.0
 
 experiments:
   main_draw: typical             # 'typical' = the robustness draw at the median standardised distance from
@@ -114,11 +131,11 @@ experiments:
   early_pass: 2                   # pass shown as "early" in the removal-map figure
   robustness_draws: 100           # hidden truths per robustness world
   robustness_worlds: [matched, realistic]
-  validation_world: realistic_b   # the pre-registered second mismatch world
-  validation_draws: 50
+  validation_worlds: [realistic_b, realistic_c]   # pre-registered mismatch worlds
+  validation_draws: 40
   ablation_world: matched         # constant-force ablation (identifiability) in the tracker's own model
   noise_world: realistic
-  noise_draws: 40                 # first draws of the noise world, re-run at every noise level
+  noise_draws: 30                 # first draws of the noise world, re-run at every noise level
   ablation_draws: 40              # first draws of the ablation world, re-run with constant force
   breakdown_draws: 30             # first draws, re-run in each single-mismatch and stress world
   noise_levels_um: [1.0, 2.0, 5.0, 10.0]

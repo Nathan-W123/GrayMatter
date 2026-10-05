@@ -106,6 +106,7 @@ def build_context(cfg: dict) -> Context:
     table = ExposureTable(model, eta_min, eta_max, int(f["surrogate_n_eta"]), obs_index)
     pf = PFConfig(n_particles=int(f["n_particles"]), ess_fraction=float(f["ess_fraction"]),
                   wear_noise_range=tuple(float(v) for v in f.get("wear_noise_range", (0.005, 0.05))),
+                  transient_range=tuple(float(v) for v in f.get("transient_range", (0.002, 0.05))),
                   rate_drift=_drift(f), sigma_floor_um=float(f["sigma_floor_um"]),
                   force_exponent_sd=float(f.get("force_exponent_sd", 0.15)),
                   force_ref=float(cfg["pad"]["reference_force_N"]),

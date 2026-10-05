@@ -314,6 +314,7 @@ class PFConfig:
     n_particles: int = 2000
     ess_fraction: float = 0.75       # tempering target ESS / N
     wear_noise_range: tuple[float, float] = (0.005, 0.05)   # log-uniform prior of the wear fluctuation s.d.
+    transient_range: tuple[float, float] = (0.002, 0.05)    # log-uniform prior of the per-pass gain s.d. (0: off)
     rate_drift: float = 0.05         # random-walk s.d. of log lambda per pass (0 = constant wear rate)
     force_exponent_sd: float = 0.15  # prior s.d. of beta in removal ~ F^beta at fixed contact shape (0 = beta = 1)
     force_ref: float = 30.0          # N: force at which K is defined when beta != 1
@@ -332,13 +333,16 @@ class PFConfig:
 class ParticleFilter:
     """Sequential Monte Carlo tracker with tempering and resample-move rejuvenation.
 
-    State of each particle: log k_pad, a force exponent beta and log sigma_w
-    (static), and the paths of log K and log lambda at the start of every pass
-    so far (K0 = K at pass 1). Model: the removal of pass j follows the
-    surrogate with within-pass wear at rate lambda_j and scale
-    a = K F s (F / F_ref)^(beta - 1); beta = 1 is Preston's law, and beta lets the
-    tracker learn a different force dependence (prior N(1, force_exponent_sd^2)
-    on [0.5, 1.5]). Between passes
+    State of each particle: log k_pad, a force exponent beta, log sigma_w and
+    log sigma_g (static), and the paths of log K, log lambda and a transient
+    log gain g at every pass so far (K0 = K at pass 1). Model: the removal of
+    pass j follows the surrogate with within-pass wear at rate lambda_j and
+    scale a = K exp(g_j) F s (F / F_ref)^(beta - 1). beta = 1 is Preston's law;
+    beta lets the tracker learn a different force dependence (prior
+    N(1, force_exponent_sd^2) on [0.5, 1.5]). g_j ~ N(0, sigma_g^2) is a gain of
+    pass j alone (force ripple, local loading) that does not carry over to
+    the next pass, unlike K; sigma_g has a log-uniform prior on
+    ``transient_range``. Between passes
 
         log K_{j+1}      = log K_j - log(1 + lambda_j a_j U_j) + N(0, sigma_w^2)
         log lambda_{j+1} = log lambda_j + N(0, rate_drift^2)
@@ -397,6 +401,17 @@ class ParticleFilter:
         lo, hi = (np.log(float(v)) for v in cfg.wear_noise_range)
         self.lsw_bounds = (lo, hi)
         self.lsw = rng.uniform(lo, hi, n) if hi > lo else np.full(n, lo)
+        tlo, thi = (float(v) for v in cfg.transient_range)
+        self.transient = thi > 0
+        self.lsg_bounds = (np.log(tlo), np.log(thi)) if self.transient else (0.0, 0.0)
+        lo_g, hi_g = self.lsg_bounds
+        self.lsg = rng.uniform(lo_g, hi_g, n) if hi_g > lo_g else np.full(n, lo_g)
+        self.gpath = np.zeros((n, n_passes_max))        # transient log gain of each pass
+        self.GP = np.zeros((n, n_passes_max))           # its log prior density
+        if self.transient:
+            xi = rng.standard_normal(n)
+            self.gpath[:, 0] = np.exp(self.lsg) * xi
+            self.GP[:, 0] = -0.5 * xi**2 - self.lsg
         self.path = np.zeros((n, n_passes_max))         # log K at the start of each pass
         self.path[:, 0] = np.log(p["K0"])
         self.lpath = np.zeros((n, n_passes_max))        # log lambda during each pass
@@ -418,32 +433,35 @@ class ParticleFilter:
         self.last_profile_sd_um = 0.0
         self.last_outliers = 0
         self.last_redone = False
-        self.rw_scale = {"theta": 1.0, "sw": 1.0, "K": 1.0, "lam": 1.0}
+        self.rw_scale = {"theta": 1.0, "sw": 1.0, "K": 1.0, "lam": 1.0, "sg": 1.0, "ridge": 1.0}
 
     # ------------------------------------------------------------------ model pieces
     def _scale(self, action: PassAction) -> float:
         return action.rpm / self.rpm_ref
 
-    def _coeffs(self, lk, llam, lK, F, s, beta=None):
-        """eta = F / k, scale a = K F s (F/F_ref)^(beta-1) and wear exponent z = lambda a of a pass."""
+    def _coeffs(self, lk, llam, lK, F, s, beta=None, g=0.0):
+        """eta = F / k, scale a = K exp(g) F s (F/F_ref)^(beta-1) and wear exponent z = lambda a of a pass."""
         beta = self.beta if beta is None else beta
         eta = F / np.exp(lk)
-        a = np.exp(lK + (beta - 1.0) * np.log(F / self.cfg.force_ref)) * (F * s)
+        a = np.exp(lK + g + (beta - 1.0) * np.log(F / self.cfg.force_ref)) * (F * s)
         return eta, a, np.exp(llam) * a
 
-    def _loglik(self, p: int, lk, llam, lK, beta=None) -> np.ndarray:
-        """Untempered log-likelihood of scan ``p``."""
-        eta, a, z = self._coeffs(lk, llam, lK, self.F[p], self.s[p], beta)
+    def _loglik(self, p: int, lk, llam, lK, beta=None, g=None) -> np.ndarray:
+        """Untempered log-likelihood of scan ``p`` (transient gain of that pass unless given)."""
+        g = self.gpath[:, p] if g is None else g
+        eta, a, z = self._coeffs(lk, llam, lK, self.F[p], self.s[p], beta, g)
         return -self.table.sse(eta, a, z, self.stats[p]) / (2.0 * self.sigma2[p])
 
-    def _mu(self, p, lk, llam, lK_p, beta=None):
-        """Expected log K at the start of pass p+1 given the state of pass p."""
-        eta, _, z = self._coeffs(lk, llam, lK_p, self.F[p], self.s[p], beta)
+    def _mu(self, p, lk, llam, lK_p, beta=None, g=None):
+        """Expected log K at the start of pass p+1 given the state of pass p (the wear of
+        pass p uses its actual removal, transient gain included). Pass ``g`` when p is an array."""
+        g = self.gpath[:, p] if g is None else g
+        eta, _, z = self._coeffs(lk, llam, lK_p, self.F[p], self.s[p], beta, g)
         return lK_p - np.log1p(z * self.table.volume(eta))
 
-    def _transition(self, p, lk, llam, lK_p, lK_next, lsw, beta=None) -> np.ndarray:
+    def _transition(self, p, lk, llam, lK_p, lK_next, lsw, beta=None, g=None) -> np.ndarray:
         """log N(log K_{p+1}; mu_p, sigma_w^2), up to a constant."""
-        return -0.5 * ((lK_next - self._mu(p, lk, llam, lK_p, beta)) / np.exp(lsw)) ** 2 - lsw
+        return -0.5 * ((lK_next - self._mu(p, lk, llam, lK_p, beta, g)) / np.exp(lsw)) ** 2 - lsw
 
     def _logprior_beta(self, beta) -> np.ndarray:
         sd = self.cfg.force_exponent_sd
@@ -504,7 +522,8 @@ class ParticleFilter:
         new = self._logprior_lam0(self.lpath[:, 0] + shift) + self._logprior_beta(betap) + LLp @ tempers
         if j:
             TRp = self._transition(np.arange(j)[None, :], lkp[:, None], self.lpath[:, :j] + shift[:, None],
-                                   self.path[:, :j], self.path[:, 1:j + 1], self.lsw[:, None], betap[:, None])
+                                   self.path[:, :j], self.path[:, 1:j + 1], self.lsw[:, None], betap[:, None],
+                                   self.gpath[:, :j])
             cur = cur + self.TR[:, :j].sum(axis=1)
             new = new + TRp.sum(axis=1)
         acc = okp & self._mh("theta", new - cur)
@@ -527,6 +546,47 @@ class ParticleFilter:
         acc = ok & self._mh("sw", np.where(ok, tr_new.sum(axis=1) - self.TR[:, :j].sum(axis=1), -np.inf))
         self.lsw = np.where(acc, prop, self.lsw)
         self.TR[acc, :j] = tr_new[acc]
+
+    def _move_sg(self, j: int) -> None:
+        """Random walk on log sigma_g; only the priors of the transient gains depend on it."""
+        lo, hi = self.lsg_bounds
+        if not self.transient or hi <= lo:
+            return
+        prop = self.lsg + self._rw_sd(self.lsg, "sg") * self.rng.standard_normal(self.lsg.size)
+        ok = (prop >= lo) & (prop <= hi)
+        gp_new = -0.5 * (self.gpath[:, :j + 1] / np.exp(prop)[:, None]) ** 2 - prop[:, None]
+        acc = ok & self._mh("sg", np.where(ok, gp_new.sum(axis=1) - self.GP[:, :j + 1].sum(axis=1), -np.inf))
+        self.lsg = np.where(acc, prop, self.lsg)
+        self.GP[acc, :j + 1] = gp_new[acc]
+
+    def _move_ridge(self, i: int, j: int) -> None:
+        """Move log K_i up and the transient gain g_i down by the same amount: the removal of
+        pass i (and so its scan likelihood) is unchanged, only the split between the
+        persistent effectiveness and the gain of that pass changes."""
+        if not self.transient:
+            return
+        d = self._rw_sd(self.gpath[:, i], "ridge") * self.rng.standard_normal(self.lk.size)
+        lK_new = self.path[:, i] + d
+        g_new = self.gpath[:, i] - d
+        gp_new = -0.5 * (g_new / np.exp(self.lsg)) ** 2 - self.lsg
+        cur, new = self.GP[:, i].copy(), gp_new
+        if i == 0:
+            cur = cur + self._logprior_K0(self.path[:, 0])
+            new = new + self._logprior_K0(lK_new)
+        else:
+            tr_in = self._transition(i - 1, self.lk, self.lpath[:, i - 1], self.path[:, i - 1], lK_new, self.lsw)
+            cur, new = cur + self.TR[:, i - 1], new + tr_in
+        if i < j:
+            tr_out = self._transition(i, self.lk, self.lpath[:, i], lK_new, self.path[:, i + 1], self.lsw, g=g_new)
+            cur, new = cur + self.TR[:, i], new + tr_out
+        acc = self._mh("ridge", new - cur)
+        self.path[acc, i] = lK_new[acc]
+        self.gpath[acc, i] = g_new[acc]
+        self.GP[acc, i] = gp_new[acc]
+        if i > 0:
+            self.TR[acc, i - 1] = tr_in[acc]
+        if i < j:
+            self.TR[acc, i] = tr_out[acc]
 
     def _move_K(self, i: int, j: int, temper: float) -> None:
         """Random walk on log K at pass i (pass 1: K0), given its neighbours on the path."""
@@ -577,12 +637,14 @@ class ParticleFilter:
         tempers[j] = phi
         self._move_theta(j, tempers)
         self._move_sw(j)
+        self._move_sg(j)
         lam_idx = range(j + 1) if full else range(max(j - 1, 0), j + 1)
         k_idx = range(j + 1) if full else sorted({0, j})
         for i in lam_idx:
             self._move_lam(i, j, tempers[i])
         for i in k_idx:
             self._move_K(i, j, tempers[i])
+            self._move_ridge(i, j)
 
     def _adapt(self, key: str, rate: float) -> None:
         """Keep acceptance near 0.3 (scale of the random-walk proposals)."""
@@ -590,7 +652,8 @@ class ParticleFilter:
 
     def _resample(self) -> None:
         idx = systematic_resample(self.w, self.rng)
-        self.lk, self.lsw, self.beta = self.lk[idx], self.lsw[idx], self.beta[idx]
+        self.lk, self.lsw, self.beta, self.lsg = self.lk[idx], self.lsw[idx], self.beta[idx], self.lsg[idx]
+        self.gpath, self.GP = self.gpath[idx], self.GP[idx]
         self.path, self.lpath, self.LL, self.TR = self.path[idx], self.lpath[idx], self.LL[idx], self.TR[idx]
         self.w = np.full(self.lk.size, 1.0 / self.lk.size)
 
@@ -600,7 +663,8 @@ class ParticleFilter:
 
     def _next_pass(self, action: PassAction):
         j = self._current()
-        return self._coeffs(self.lk, self.lpath[:, j], self.path[:, j], action.force, self._scale(action))
+        return self._coeffs(self.lk, self.lpath[:, j], self.path[:, j], action.force, self._scale(action),
+                            g=self.gpath[:, j])
 
     def predict(self, action: PassAction) -> np.ndarray:
         """Posterior predictive mean removal map for the next pass (scan points)."""
@@ -611,6 +675,19 @@ class ParticleFilter:
         """Predictive quantiles of the next pass's mean removal over the scan points."""
         eta, a, z = self._next_pass(action)
         return weighted_quantiles(self.table.mean_removal(eta, self.table.coefficients(a, z)), self.w, q)
+
+    def predict_region_removal(self, action: PassAction, region_tables: np.ndarray, q=(0.05, 0.5, 0.95)) -> np.ndarray:
+        """Predictive quantiles of the next pass's mean removal over regions of the scan.
+        ``region_tables[r]`` (N_TAB, n_eta) is the mean of the surrogate tables over the scan
+        points of region r. Returns (n_regions, len(q))."""
+        eta, a, z = self._next_pass(action)
+        b = self.table.coefficients(a, z)
+        e, t = self.table.locate(eta)
+        out = []
+        for M in region_tables:
+            m = (1 - t)[:, None] * M[:, e].T + t[:, None] * M[:, e + 1].T
+            out.append(weighted_quantiles(np.einsum("nc,nc->n", b, m), self.w, q))
+        return np.array(out)
 
     def _tempered_update(self, j: int) -> int:
         n = self.lk.size
@@ -646,11 +723,13 @@ class ParticleFilter:
         return stages
 
     def _snapshot(self):
-        return (self.lk.copy(), self.lsw.copy(), self.beta.copy(), self.path.copy(), self.lpath.copy(),
-                self.w.copy(), self.LL.copy(), self.TR.copy(), dict(self.rw_scale))
+        return (self.lk.copy(), self.lsw.copy(), self.beta.copy(), self.lsg.copy(), self.path.copy(),
+                self.lpath.copy(), self.gpath.copy(), self.GP.copy(), self.w.copy(), self.LL.copy(),
+                self.TR.copy(), dict(self.rw_scale))
 
     def _restore(self, snap) -> None:
-        (self.lk, self.lsw, self.beta, self.path, self.lpath, self.w, self.LL, self.TR, rw) = snap
+        (self.lk, self.lsw, self.beta, self.lsg, self.path, self.lpath, self.gpath, self.GP, self.w, self.LL,
+         self.TR, rw) = snap
         self.rw_scale = dict(rw)
 
     def _outliers(self, resid: np.ndarray, base2: float) -> np.ndarray:
@@ -753,6 +832,10 @@ class ParticleFilter:
         self.path[:, j + 1] = mu + np.exp(self.lsw) * xi
         self.TR[:, j] = -0.5 * xi**2 - self.lsw
         self.lpath[:, j + 1] = self.lpath[:, j] + self.cfg.rate_drift * self.rng.standard_normal(n)
+        if self.transient:     # the gain of the coming pass, drawn from its prior
+            xi = self.rng.standard_normal(n)
+            self.gpath[:, j + 1] = np.exp(self.lsg) * xi
+            self.GP[:, j + 1] = -0.5 * xi**2 - self.lsg
         self.n_k += 1
 
     # ------------------------------------------------------------------ reporting
@@ -782,6 +865,7 @@ class ParticleFilter:
         out["sigma_um"] = self.last_sigma_um
         out["profile_sd_um"] = self.last_profile_sd_um
         out["wear_noise"] = self.wear_noise()
+        out["transient_noise"] = float(np.exp(weighted_quantiles(self.lsg, self.w, [0.5])[0])) if self.transient else 0.0
         out["min_path_diversity"] = min(self.ancestral_diversity(i) for i in range(j + 1))
         out["outliers"] = self.last_outliers
         out["redone"] = self.last_redone
@@ -810,7 +894,8 @@ class ParticleFilter:
             if done.all():
                 break
             a = action_at(schedule, i0 + j)   # pass whose wear we apply
-            eta, _, z = self._coeffs(self.lk, llam, lK, a.force, a.rpm / self.rpm_ref)
+            g = self.gpath[:, i0] if j == 0 else np.exp(self.lsg) * self.rollout_rng.standard_normal(n)
+            eta, _, z = self._coeffs(self.lk, llam, lK, a.force, a.rpm / self.rpm_ref, g=g)
             lK = lK - np.log1p(z * self.table.volume(eta)) + sw * self.rollout_rng.standard_normal(n)
             llam = llam + self.cfg.rate_drift * self.rollout_rng.standard_normal(n)
             new = (~done) & (lK < lthr)

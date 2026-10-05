@@ -128,6 +128,9 @@ def test_mh_moves_leave_the_prior_invariant(small_ctx):
     assert np.std(pf.lpath[:, 0]) == pytest.approx(pr.lam_sigma_log, rel=0.06)
     assert np.mean(pf.path[:, 0]) == pytest.approx(np.log(pr.K0_median), abs=0.02)
     assert np.std(pf.path[:, 0]) == pytest.approx(pr.K0_sigma_log, rel=0.06)
+    lo, hi = (np.log(v) for v in small_ctx.pf.transient_range)
+    assert np.mean(pf.lsg) == pytest.approx(0.5 * (lo + hi), abs=0.08)
+    assert np.std(pf.lsg) == pytest.approx((hi - lo) / np.sqrt(12), rel=0.06)
 
 
 def test_crossing_prediction_before_and_after_threshold(small_ctx):
@@ -160,7 +163,8 @@ def test_particle_filter_wear_step_uses_each_particles_own_removed_volume(small_
     """advance(): K at the next pass = K / (1 + lambda K U), U = that particle's removed
     volume per unit effectiveness (exact within-pass wear of the single-stage law)."""
     m, pr = small_ctx.model, small_ctx.priors
-    pf = _pf(small_ctx, 0, wear_noise_range=(1e-12, 1e-12), rate_drift=0.0, force_exponent_sd=0.0, n_particles=4)
+    pf = _pf(small_ctx, 0, wear_noise_range=(1e-12, 1e-12), rate_drift=0.0, force_exponent_sd=0.0,
+             transient_range=(0.0, 0.0), n_particles=4)
     ks = np.array([pr.k_low * 1.01, 0.01, 0.3, pr.k_high * 0.99])
     Ks = np.array([6e-5, 5e-5, 4e-5, 7e-5])
     lams = np.array([2e-4, 3e-4, 2.5e-4, 4e-4])
@@ -190,8 +194,9 @@ def test_credible_interval_width_matches_analytic_posterior(small_cfg):
     dm = (removal(K_true * (1 + h)) - removal(K_true * (1 - h)))[sc.obs_index] / (2 * h * K_true)
     sd_K = 2e-3 / np.sqrt(dm @ dm)                 # noise sigma = 2 um
     ratios, inside = [], 0
+    cfg = dataclasses.replace(ctx.pf, transient_range=(0.0, 0.0))   # no per-pass gain to confound K
     for seed in range(8):
-        pf = ParticleFilter(ctx.table, ctx.priors, ctx.pf, rng_for(50, seed), obs_shape=ctx.obs_shape)
+        pf = ParticleFilter(ctx.table, ctx.priors, cfg, rng_for(50, seed), obs_shape=ctx.obs_shape)
         pf.update(sc.observe(removal(K_true), np.random.default_rng(seed)), a, 2.0)
         s = pf.summary()["K"]
         ratios.append((s["hi"] - s["lo"]) / (2 * 1.6449 * sd_K))
@@ -276,3 +281,16 @@ def test_force_exponent_is_learned(small_ctx):
     for n, a in enumerate(sched[:10]):
         D.update(sc.observe(traj.removal[n], rng), a)
     assert D.gamma == pytest.approx(-0.2, abs=0.05)
+
+
+def test_transient_gain_is_told_apart_from_wear(small_ctx):
+    """A truth whose removal has an independent 4% gain per pass (and no lasting fluctuation):
+    C attributes it to the transient gain (sigma_g well above its matched-world value) and
+    keeps the wear-fluctuation estimate small."""
+    sched = small_ctx.schedule()
+    traj = simulate_truth(small_ctx.model, HiddenTruth(0.05, 6e-5, 2.0e-4), sched, 0.0, np.random.default_rng(1))
+    traj.removal = traj.removal * np.exp(0.04 * np.random.default_rng(7).standard_normal(len(sched)))[:, None]
+    sc = Scanner(small_ctx.panel, 2.0, small_ctx.cfg["scan"]["stride"])
+    s = _track(small_ctx, _pf(small_ctx, 8), traj, sc, np.random.default_rng(2), 2.0).summary()
+    assert s["transient_noise"] > 0.02
+    assert s["wear_noise"] < s["transient_noise"]
