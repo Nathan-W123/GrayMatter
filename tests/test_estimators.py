@@ -160,7 +160,7 @@ def test_particle_filter_wear_step_uses_each_particles_own_removed_volume(small_
     """advance(): K at the next pass = K / (1 + lambda K U), U = that particle's removed
     volume per unit effectiveness (exact within-pass wear of the single-stage law)."""
     m, pr = small_ctx.model, small_ctx.priors
-    pf = _pf(small_ctx, 0, wear_sigma=1e-12, rate_drift=0.0, adaptive_wear_noise=False, n_particles=4)
+    pf = _pf(small_ctx, 0, wear_noise_range=(1e-12, 1e-12), rate_drift=0.0, n_particles=4)
     ks = np.array([pr.k_low * 1.01, 0.01, 0.3, pr.k_high * 0.99])
     Ks = np.array([6e-5, 5e-5, 4e-5, 7e-5])
     lams = np.array([2e-4, 3e-4, 2.5e-4, 4e-4])
@@ -235,9 +235,9 @@ def test_profile_offsets_are_estimated_only_when_present(small_ctx):
     assert pf.summary()["sigma_um"] == pytest.approx(2.0, rel=0.1)
 
 
-def test_adaptive_wear_noise_grows_only_when_forecasts_miss(small_ctx):
-    """Matched truth (1% fluctuation): the process-noise estimate stays near 1%. A truth whose
-    K fluctuates 4% per pass: the estimate rises well above 1%."""
+def test_wear_noise_level_is_learned(small_ctx):
+    """The wear-fluctuation s.d. is a parameter with a log-uniform prior on [0.5%, 5%]: for a
+    truth fluctuating 1% per pass its posterior median ends near 1%, for 4% well above 2.5%."""
     sched = small_ctx.schedule()
     sc = Scanner(small_ctx.panel, 2.0, small_ctx.cfg["scan"]["stride"])
     out = {}
@@ -245,5 +245,15 @@ def test_adaptive_wear_noise_grows_only_when_forecasts_miss(small_ctx):
         traj = simulate_truth(small_ctx.model, HiddenTruth(0.05, 6e-5, 2.0e-4), sched, sw,
                               np.random.default_rng(2))
         out[sw] = _track(small_ctx, _pf(small_ctx, 4), traj, sc, np.random.default_rng(3), 2.0).wear_noise()
-    assert out[0.01] < 0.015
+    assert 0.006 < out[0.01] < 0.016
     assert out[0.04] > 0.025
+
+
+def test_full_path_sweeps_keep_the_path_diverse(small_ctx):
+    """After 12 passes, every stored log K value (not only the current one) still has many
+    distinct particles, because the final sweep moves the whole path."""
+    traj = simulate_truth(small_ctx.model, HiddenTruth(0.05, 6e-5, 2.5e-4), small_ctx.schedule(), 0.01,
+                          np.random.default_rng(2))
+    sc = Scanner(small_ctx.panel, 2.0, small_ctx.cfg["scan"]["stride"])
+    pf = _track(small_ctx, _pf(small_ctx, 5), traj, sc, np.random.default_rng(3), 2.0, passes=12)
+    assert min(pf.ancestral_diversity(i) for i in range(12)) > 0.2 * pf.lk.size

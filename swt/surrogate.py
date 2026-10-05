@@ -236,12 +236,12 @@ class ExposureTable:
             + (t * t) * np.einsum("nm,nm->n", W, st.gd[e + 1])
         return np.maximum(st.yy - 2 * a * lin + a * a * quad, 0.0)
 
-    def profile_sse(self, eta: np.ndarray, st: ScanStats) -> tuple[np.ndarray, np.ndarray]:
-        """Best scale a*(eta) without wear (z = 0) and the resulting SSE."""
+    def profile_sse(self, eta: np.ndarray, st: ScanStats, z: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+        """Best scale a*(eta) and the resulting SSE for a fixed within-pass wear exponent z
+        (z = 0: no wear during the pass)."""
         e, t = self.locate(eta)
         s = 1 - t
-        y_m = s * st.Y[0, e] + t * st.Y[0, e + 1]
-        Go = st.Go[np.minimum(e, self.n_eta - 2), 0, 0]
-        m_m = s * s * st.Gd[e, 0, 0] + 2 * s * t * Go + t * t * st.Gd[e + 1, 0, 0]
+        W = self.powers(np.array(-float(z)), 2 * N_TAB - 1)
+        y_m = s * (st.Yt[e] @ W[:N_TAB]) + t * (st.Yt[e + 1] @ W[:N_TAB])
+        m_m = s * s * (st.gd[e] @ W) + s * t * (st.go[np.minimum(e, self.n_eta - 2)] @ W) + t * t * (st.gd[e + 1] @ W)
         return y_m / m_m, np.maximum(st.yy - y_m * y_m / m_m, 0.0)
-

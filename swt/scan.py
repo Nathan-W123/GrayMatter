@@ -15,13 +15,19 @@ about them):
   gets its own constant offset;
 * outliers: a small fraction of points get a large error (e.g. reflections);
 * dropouts: a fraction of points is missing (returned as NaN), half of them
-  as isolated points and half as short gaps along a profile.
+  as isolated points and half as short gaps along a profile;
+* surface texture: the removal is measured as the difference of the height
+  scans before and after the pass, and each pass leaves a new random surface
+  texture (spatially correlated over ``texture_corr_mm``). The texture left by
+  pass n therefore enters the scans of pass n (with a minus sign) and pass n+1
+  (with a plus sign).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.ndimage import gaussian_filter
 from scipy.ndimage import shift as nd_shift
 
 from .geometry import Panel
@@ -35,6 +41,8 @@ class ScanArtefacts:
     outlier_um: float = 15.0
     dropout_fraction: float = 0.0
     dropout_gap_points: int = 8
+    texture_um: float = 0.0          # RMS of the surface texture each pass leaves
+    texture_corr_mm: float = 1.0     # its correlation length (Gaussian kernel s.d.)
 
     @property
     def any(self) -> bool:
@@ -56,6 +64,13 @@ class Scanner:
         ix = np.arange(0, nx, stride)
         self.obs_shape = (iy.size, ix.size)
         self.obs_index = (iy[:, None] * nx + ix[None, :]).ravel()
+        self._texture: np.ndarray | None = None   # texture of the surface before the next pass
+
+    def _new_texture(self, rng: np.random.Generator) -> np.ndarray:
+        art = self.artefacts
+        g = gaussian_filter(rng.standard_normal(self.panel.shape), art.texture_corr_mm / self.panel.grid,
+                            mode="wrap")
+        return (art.texture_um * 1e-3 / g.std() * g).ravel()
 
     @property
     def n_obs(self) -> int:
@@ -65,6 +80,12 @@ class Scanner:
         """Noisy scan of a removal map [mm] at the scanner's sample points (NaN = missing)."""
         art = self.artefacts
         field = np.asarray(removal_flat)
+        if art.texture_um > 0:           # (height before + old texture) - (height after + new texture)
+            if self._texture is None:
+                self._texture = self._new_texture(rng)
+            new = self._new_texture(rng)
+            field = field + self._texture - new
+            self._texture = new
         if art.registration_sigma_mm > 0:
             off = rng.normal(0.0, art.registration_sigma_mm, 2) / self.panel.grid
             field = nd_shift(field.reshape(self.panel.shape), off, order=1, mode="nearest").ravel()

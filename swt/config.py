@@ -105,15 +105,13 @@ def build_context(cfg: dict) -> Context:
     f = cfg["filter"]
     table = ExposureTable(model, eta_min, eta_max, int(f["surrogate_n_eta"]), obs_index)
     pf = PFConfig(n_particles=int(f["n_particles"]), ess_fraction=float(f["ess_fraction"]),
-                  wear_sigma=float(pr["wear_sigma_log"]), rate_drift=_drift(f),
-                  sigma_floor_um=float(f["sigma_floor_um"]),
+                  wear_noise_range=tuple(float(v) for v in f.get("wear_noise_range", (0.005, 0.05))),
+                  rate_drift=_drift(f), sigma_floor_um=float(f["sigma_floor_um"]),
                   threshold=float(cfg["abrasive"]["threshold_fraction"]),
-                  mcmc_sweeps=int(f.get("mcmc_sweeps", 2)), robust=bool(f.get("robust", True)),
+                  mcmc_sweeps=int(f.get("mcmc_sweeps", 1)), robust=bool(f.get("robust", True)),
                   outlier_z=float(f.get("outlier_z", 5.0)), inflation_block=int(f.get("inflation_block", 4)),
                   inflation_threshold=float(f.get("inflation_threshold", 1.2)),
-                  profile_offsets=bool(f.get("profile_offsets", True)),
-                  adaptive_wear_noise=bool(f.get("adaptive_wear_noise", True)),
-                  wear_noise_prior_passes=float(f.get("wear_noise_prior_passes", 4.0)))
+                  profile_offsets=bool(f.get("profile_offsets", True)))
     worlds = build_worlds(cfg.get("worlds", {}))
     ctx = Context(cfg, panel, path, sander, model, priors, table, obs_index, obs_shape, pf, worlds)
     ctx.build_seconds = time.time() - t0
@@ -135,19 +133,23 @@ def make_world(name: str, spec: dict) -> tuple[World, ScanArtefacts]:
     wear = WearLaw(w.get("kind", "single"), float(w.get("fast_fraction", 0.25)), float(w.get("fast_ratio", 6.0)))
     f = spec.get("force", {})
     world = World(name, law, float(f.get("gain_sigma_log", 0.0)), float(f.get("ripple", 0.0)),
-                  float(f.get("ripple_corr", 0.5)), wear)
+                  float(f.get("ripple_corr", 0.5)), wear, int(w.get("rings", 1)),
+                  float(spec.get("removal", {}).get("preston_exponent", 1.0)))
     return world, ScanArtefacts(**spec.get("scan", {}))
+
+
+GROUPS = ("pad", "removal", "force", "wear", "scan")
 
 
 def build_worlds(spec: dict) -> dict[str, tuple[World, ScanArtefacts]]:
     """``matched`` (the tracker's own model), the configured worlds, and for the
-    ``realistic`` world one single-ingredient world per mismatch it contains."""
+    ``realistic`` world one world per group of mismatches it contains."""
     worlds = {"matched": (MATCHED, ScanArtefacts())}
     for name, s in spec.items():
         worlds[name] = make_world(name, s or {})
     real = spec.get("realistic")
     if real:
-        for key in ("pad", "force", "wear", "scan"):
+        for key in GROUPS:
             if key in real:
                 worlds["only_" + key] = make_world("only_" + key, {key: real[key]})
     return worlds

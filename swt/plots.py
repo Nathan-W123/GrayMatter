@@ -28,8 +28,9 @@ SEQ = LinearSegmentedColormap.from_list("swt_blue", ["#f4f8fd"] + BLUE_RAMP)
 EST = {"A": ("A: nominal", GRAY), "B": ("B: calibrate-once", ORANGE), "D": ("D: refit each pass", GREEN),
        "C": ("C: joint tracker", BLUE)}
 WORLD_LABEL = {"matched": "matched world (tracker's own model)", "realistic": "realistic world (unmodelled effects)",
-               "only_pad": "foam pad only", "only_force": "force errors only", "only_wear": "two-stage wear only",
-               "only_scan": "scanner artefacts only"}
+               "realistic_b": "second mismatch world (pre-registered)",
+               "only_pad": "foam pad only", "only_removal": "Preston exponent only", "only_force": "force errors only",
+               "only_wear": "abrasive wear only", "only_scan": "scanner effects only"}
 
 
 def _truthy(v) -> bool:
@@ -207,8 +208,8 @@ def fig_maps(res: Path, figdir: Path) -> None:
 def fig_rmse(res: Path, figdir: Path) -> None:
     rob = _read_csv(res / "robustness_per_pass.csv")
     rsum = json.loads((res / "robustness_summary.json").read_text())
-    worlds = [w for w in ("matched", "realistic") if w in rsum["worlds"]]
-    fig, axes = plt.subplots(1, len(worlds), figsize=(6.2 * len(worlds), 4.9), sharey=True, squeeze=False)
+    worlds = [w for w in ("matched", "realistic", "realistic_b") if w in rsum["worlds"]]
+    fig, axes = plt.subplots(1, len(worlds), figsize=(5.6 * len(worlds), 4.9), sharey=True, squeeze=False)
     for ax, w in zip(axes[0], worlds):
         rows = [r for r in rob if r["world"] == w]
         passes = sorted({int(r["pass"]) for r in rows})
@@ -226,12 +227,13 @@ def fig_rmse(res: Path, figdir: Path) -> None:
                         color=INK, fontsize=13, fontweight="bold")
         ax.set_yscale("log")
         ax.set_xlabel("pass")
-        ax.set_title(f"{WORLD_LABEL[w]}\n{rsum['worlds'][w]['n_draws']} hidden truths: median, IQR", fontsize=13)
+        title = WORLD_LABEL[w].replace(" (", "\n(") if len(WORLD_LABEL[w]) > 30 else WORLD_LABEL[w]
+        ax.set_title(f"{title}\n{rsum['worlds'][w]['n_draws']} hidden truths: median, IQR", fontsize=12.5)
         ax.set_xticks(range(0, len(passes) + 1, 5))
         ax.set_xlim(0.5, len(passes) + 2.0)
     axes[0, 0].set_ylabel("next-pass removal-map RMSE [µm] (log)")
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.suptitle("Next-pass prediction error: C tracks the wearing abrasive in both worlds",
+    fig.suptitle("Next-pass prediction error per pass (lower is better)",
                  x=0.01, ha="left", fontsize=15, fontweight="bold")
     fig.tight_layout(rect=(0, 0.09, 1, 1))
     fig.legend(handles, labels, loc="lower center", ncol=5, fontsize=11, bbox_to_anchor=(0.5, 0.0))
@@ -427,11 +429,11 @@ def fig_mismatch(res: Path, figdir: Path) -> None:
     ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.07), ncol=4, fontsize=10)
     ax.grid(axis="y", visible=False)
     bx = axes[1]
-    for w, c in (("matched", INK2), ("realistic", BLUE)):
+    for w, c, ls in (("matched", INK2, "-"), ("realistic", BLUE, "-"), ("realistic_b", BLUE, "--")):
         if w not in rsum["worlds"]:
             continue
         pp = rsum["worlds"][w]["predictive_90"]["per_pass_fraction"]
-        bx.plot(np.arange(2, len(pp) + 1), 100 * np.array(pp[1:]), color=c, lw=2.2, marker="o", ms=4,
+        bx.plot(np.arange(2, len(pp) + 1), 100 * np.array(pp[1:]), color=c, lw=2.0, ls=ls, marker="o", ms=3.5,
                 label=f"{w}: {100 * rsum['worlds'][w]['predictive_90']['passes_2_on']['fraction']:.0f}% overall")
     bx.axhline(90, color=INK, lw=1.0, ls=":")
     bx.set_ylim(0, 105)

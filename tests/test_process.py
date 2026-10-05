@@ -186,3 +186,35 @@ def test_foam_pad_changes_the_map_but_not_the_load(small_ctx):
         # the same total load and sliding speed field -> almost the same volume; a different map
         assert fo.sum() == pytest.approx(lin.sum(), rel=0.02)
         assert np.linalg.norm(fo - lin) / np.linalg.norm(lin) > 1e-3
+
+
+def test_preston_exponent_keeps_the_load_and_changes_the_volume(small_ctx):
+    """alpha = 1 is the default law; with alpha < 1 the pressure-weighted removal favours
+    spread-out (soft) contact over concentrated (stiff) contact."""
+    m = small_ctx.model
+    for k in (1e-3, 2.0):
+        E1, u1 = m.line_exposures(30.0, k)
+        assert np.allclose(m.line_exposures(30.0, k, alpha=1.0)[0], E1)
+    soft = m.line_exposures(30.0, 1e-3, alpha=0.8)[1].sum() / m.line_exposures(30.0, 1e-3)[1].sum()
+    stiff = m.line_exposures(30.0, 2.0, alpha=0.8)[1].sum() / m.line_exposures(30.0, 2.0)[1].sum()
+    assert soft > stiff
+
+
+def test_ring_resolved_exposures_add_up(small_ctx):
+    m = small_ctx.model
+    E, u = m.line_exposures(30.0, 0.05)
+    Er, ur = m.line_exposures(30.0, 0.05, rings=5)
+    assert Er.shape == (5,) + E.shape and np.allclose(Er.sum(axis=0), E) and np.allclose(ur.sum(axis=0), u)
+
+
+def test_radial_wear_dulls_the_pad_centre_of_a_stiff_pad(small_ctx):
+    """With ring-resolved wear, a stiff pad (contact near its centre) loses effectiveness
+    faster than with uniform wear, and one ring reproduces the uniform law exactly."""
+    sched = small_ctx.schedule()
+    truth = HiddenTruth(2.0, 6e-5, 2.5e-4)
+    uni = simulate_truth(small_ctx.model, truth, sched, 0.0, np.random.default_rng(0))
+    one = simulate_truth(small_ctx.model, truth, sched, 0.0, np.random.default_rng(0), world=World("1", wear_rings=1))
+    rings = simulate_truth(small_ctx.model, truth, sched, 0.0, np.random.default_rng(0), world=World("r", wear_rings=6))
+    assert np.allclose(one.removal, uni.removal, rtol=1e-12)
+    assert rings.K[-1] < uni.K[-1]
+    assert np.allclose(rings.volume, [small_ctx.model.volume(r) for r in rings.removal], rtol=1e-9)

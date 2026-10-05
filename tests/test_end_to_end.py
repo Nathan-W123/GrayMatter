@@ -11,6 +11,7 @@ TINY = {
     "schedule": {"n_passes": 6},
     "filter": {"surrogate_n_eta": 96, "n_particles": 600},
     "experiments": {"robustness_draws": 3, "noise_draws": 2, "ablation_draws": 2, "breakdown_draws": 2,
+                    "validation_draws": 2,
                     "noise_levels_um": [2.0, 5.0], "contact_sweep_k": [1.0e-4, 30.0, 9]},
     "tuning": {"draws": [200, 202], "rate_drift": [0.0, 0.1]},
 }
@@ -33,7 +34,9 @@ def test_run_all_and_figures(tmp_path, capsys):
     assert ctx.pf.rate_drift == on_disk["tuning"]["chosen_rate_drift"]
     main = on_disk["main_run"]["worlds"][on_disk["main_run"]["world"]]
     assert {"mean", "median", "lo", "hi"} <= set(main["C_final"]["k_pad"])
-    assert set(on_disk["world_breakdown"]["worlds"]) == {"matched", "only_pad", "only_force", "only_wear",
-                                                         "only_scan", "realistic"}
+    assert set(on_disk["world_breakdown"]["worlds"]) == {"matched", "only_pad", "only_removal", "only_force",
+                                                         "only_wear", "only_scan", "realistic"}
+    assert on_disk["robustness"]["worlds"]["realistic_b"]["n_draws"] == 2
+    assert {"C", "D", "A", "R"} <= set(on_disk["abrasive_change"]["worlds"]["realistic"]["decision_rules"])
     assert (res / "abrasive_change_by_lead.csv").exists()
     assert "Robustness, realistic world, 3 hidden truths" in capsys.readouterr().out

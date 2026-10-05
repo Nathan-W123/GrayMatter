@@ -179,7 +179,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
             "pass": n + 1, "force_N": action.force, "rpm": action.rpm,
             "true_k_pad": truth.k_pad, "true_K0": truth.K0, "true_lam": truth.lam, "true_K": float(traj.K[n]),
             "true_force_gain": truth.force_gain,
-            "true_mean_removal_um": true_mean * UM,
+            "true_mean_removal_um": true_mean * UM, "scan_mean_um": float(np.nanmean(scan)) * UM,
             "rmse_A_um": rmse_um(preds["A"], true_obs),
             "rmse_B_um": rmse_um(preds["B"], true_obs) if full else nan,
             "rmse_C_um": rmse_um(preds["C"], true_obs),
@@ -193,7 +193,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
                 row[f"C_{name}_{stat}"] = s[name][stat]
         row.update({
             "C_corr_logk_logK": s["corr_logk_logK"], "C_stages": s["stages"],
-            "C_sigma_um": s["sigma_um"], "C_profile_sd_um": s["profile_sd_um"], "C_wear_noise": s["wear_noise"], "C_outliers": s["outliers"], "C_redone": bool(s["redone"]),
+            "C_sigma_um": s["sigma_um"], "C_profile_sd_um": s["profile_sd_um"], "C_wear_noise": s["wear_noise"], "C_min_path_diversity": s["min_path_diversity"], "C_outliers": s["outliers"], "C_redone": bool(s["redone"]),
             "B_k_pad": B.k_pad if full else nan, "B_K": B.K if full else nan,
             "D_k_pad": D.k_pad if full else nan, "D_K": D.K if full else nan, "D_lam": D.lam if full else nan,
             "cross_C_median": cr["median"], "cross_C_lo": cr["lo"], "cross_C_hi": cr["hi"],
@@ -359,6 +359,7 @@ def _world_info(ctx: Context, cg: ContactGeometry, forces: list[float], nom: dic
     for name, (w, art) in ctx.worlds.items():
         d = {"pad_law": w.pad_law.kind, "force_gain_sigma_log": w.force_gain_sigma,
              "force_ripple": w.force_ripple, "ripple_corr": w.ripple_corr, "wear_law": w.wear.kind,
+             "wear_rings": w.wear_rings, "preston_exponent": w.preston_exponent,
              "scan_artefacts": {k: getattr(art, k) for k in art.__dataclass_fields__}}
         if w.pad_law.kind == "foam":
             h = w.pad_law.thickness
@@ -384,6 +385,26 @@ def _world_info(ctx: Context, cg: ContactGeometry, forces: list[float], nom: dic
                               "volume_to_half_K0_mm3": v50, "nominal_first_pass_volume_mm3": V1,
                               "K_over_K0_after_first_pass": {"single": single.phi(lam, V1),
                                                              "two_stage": w.wear.phi(lam, V1)}}
+        if w.preston_exponent != 1.0:
+            F = float(ctx.cfg["pad"]["reference_force_N"])
+            vol = {lab: float(ctx.model.line_exposures(F, k, alpha=w.preston_exponent)[1].sum()
+                              / ctx.model.line_exposures(F, k)[1].sum())
+                   for lab, k in (("soft_k_low", pr.k_low), ("mid", nom["k_pad"]), ("stiff_k_high", pr.k_high))}
+            d["preston"] = {"exponent": w.preston_exponent, "p_ref_kPa": 10.0, "force_N": F,
+                            "volume_ratio_vs_linear": vol,
+                            "soft_over_stiff_volume_ratio": vol["soft_k_low"] / vol["stiff_k_high"]}
+        if w.wear_rings > 1:
+            from .process import World
+            sched = ctx.schedule()
+            k20 = {}
+            for lab, k in (("soft_k_low", pr.k_low), ("mid", nom["k_pad"]), ("stiff_k_high", pr.k_high)):
+                truth = HiddenTruth(float(k), nom["K0"], nom["lam"])
+                rings = simulate_truth(ctx.model, truth, sched, 0.0, rng_for(0, 0), max_extend=0,
+                                       world=World("r", wear=w.wear, wear_rings=w.wear_rings))
+                uni = simulate_truth(ctx.model, truth, sched, 0.0, rng_for(0, 0), max_extend=0,
+                                     world=World("u", wear=w.wear))
+                k20[lab] = {"rings": float(rings.K[-1] / nom["K0"]), "uniform": float(uni.K[-1] / nom["K0"])}
+            d["radial_wear"] = {"rings": w.wear_rings, "K_over_K0_at_last_pass_nominal": k20}
         out[name] = d
     return out
 
@@ -528,6 +549,30 @@ def _coverage(finals: list[dict]) -> dict:
     return out
 
 
+def bootstrap_ci(x, stat=np.median, n_boot: int = 2000, level: float = 0.9, seed: int = 10) -> list[float]:
+    """Percentile bootstrap interval of a statistic over draws (resampling draws)."""
+    x = np.asarray(x, dtype=float)
+    if x.size < 2:
+        return [float("nan"), float("nan")]
+    rng = np.random.default_rng(seed)
+    boots = np.array([stat(x[rng.integers(0, x.size, x.size)]) for _ in range(n_boot)])
+    a = (1 - level) / 2
+    return [float(np.quantile(boots, a)), float(np.quantile(boots, 1 - a))]
+
+
+def _c_vs_d(finals: list[dict]) -> dict:
+    """C against D over draws: error ratios and win fractions with 90% bootstrap intervals."""
+    out = {}
+    for label, c_key, d_key in (("final", "final_rmse_C_um", "final_rmse_D_um"),
+                                ("mean_over_passes", "mean_rmse_C_um", "mean_rmse_D_um")):
+        ratio = np.array([f[d_key] / f[c_key] for f in finals])
+        wins = (ratio > 1).astype(float)
+        out[label] = {"D_over_C_median": float(np.median(ratio)), "D_over_C_median_ci90": bootstrap_ci(ratio),
+                      "C_better": int(wins.sum()), "n": int(wins.size),
+                      "C_better_fraction_ci90": bootstrap_ci(wins, np.mean)}
+    return out
+
+
 def interval_score(r: dict, alpha: float = 0.1) -> float:
     """Interval score (Gneiting & Raftery 2007) of C's central 90% interval for the
     mean removal, relative to the true value: width plus 2/alpha times any miss.
@@ -587,6 +632,8 @@ def task_list(ctx: Context) -> list[tuple]:
     e = ctx.cfg["experiments"]
     n = int(e["robustness_draws"])
     tasks = [("robustness", w, d) for w in e["robustness_worlds"] for d in range(n)]
+    if e.get("validation_world") in ctx.worlds:
+        tasks += [("robustness", e["validation_world"], d) for d in range(int(e.get("validation_draws", n)))]
     nb = int(e.get("breakdown_draws", 0))
     tasks += [("breakdown", w, d) for d in range(nb) for w in ctx.worlds if w.startswith("only_")]
     return tasks
@@ -715,6 +762,7 @@ def experiment_tuning(ctx: Context, out: Path, verbose: bool = True, workers=1) 
                "mean relative interval score of the 90% predictive interval of next-pass mean removal",
                "by_value": by_value, "chosen_rate_drift": chosen, "chosen_index": by_value.index(best),
                "chosen": best, "constant_rate": next((v for v in by_value if v["rate_drift"] == 0.0), None)}
+    summary["config_hash"] = _tuning_hash(ctx.cfg)
     write_csv(out / "tuning.csv", table)
     write_json(out / "tuning.json", summary)
     set_rate_drift(ctx, chosen)
@@ -727,6 +775,14 @@ def experiment_tuning(ctx: Context, out: Path, verbose: bool = True, workers=1) 
             print(f"  drift {v['rate_drift']:5.3f}: interval score {v['mean_interval_score']:.4f}  {cells}")
         print(f"  chosen rate_drift = {chosen:g}")
     return summary
+
+
+def _tuning_hash(cfg: dict) -> str:
+    """Hash of everything the tuning result depends on (the config without the tuned value)."""
+    import copy
+    c = copy.deepcopy(cfg)
+    c["filter"].pop("rate_drift", None)
+    return config_hash(c)
 
 
 def set_rate_drift(ctx: Context, value: float) -> None:
@@ -743,8 +799,11 @@ def tuned_rate_drift(ctx: Context, out: Path, verbose: bool = True, workers=1) -
     path = out / "tuning.json"
     if path.exists():
         info = json.loads(path.read_text())
-        set_rate_drift(ctx, info["chosen_rate_drift"])
-        return float(info["chosen_rate_drift"])
+        if info.get("config_hash") == _tuning_hash(ctx.cfg):
+            set_rate_drift(ctx, info["chosen_rate_drift"])
+            return float(info["chosen_rate_drift"])
+        if verbose:
+            print(f"[swt] {path} was made with another configuration: tuning again")
     return experiment_tuning(ctx, out, verbose, workers)["chosen_rate_drift"]
 
 
@@ -806,6 +865,7 @@ def _world_robustness(ctx: Context, rows: list[dict]) -> dict:
         "draws_C_better_than_D_at_final_pass": int(sum(f["final_rmse_C_um"] < f["final_rmse_D_um"] for f in finals)),
         "draws_C_better_than_D_mean_over_passes": int(sum(f["mean_rmse_C_um"] < f["mean_rmse_D_um"] for f in finals)),
         "final_rmse_D_over_C": iqr_summary([f["final_rmse_D_um"] / f["final_rmse_C_um"] for f in finals]),
+        "C_vs_D": _c_vs_d(finals),
         "mean_rmse_D_over_C": iqr_summary([f["mean_rmse_D_um"] / f["mean_rmse_C_um"] for f in finals]),
         "draws_B_worse_than_A_at_final_pass": int(sum(f["final_rmse_B_um"] > f["final_rmse_A_um"] for f in finals)),
         "draws_C_within_2x_oracle_at_final_pass": int(sum(f["final_rmse_C_um"] <= 2 * f["final_rmse_oracle_um"]
@@ -826,9 +886,18 @@ def _world_robustness(ctx: Context, rows: list[dict]) -> dict:
     }, finals
 
 
+def robust_worlds(ctx: Context) -> list[str]:
+    """Worlds with full robustness runs: the configured ones plus the validation world."""
+    e = ctx.cfg["experiments"]
+    worlds = list(e["robustness_worlds"])
+    if e.get("validation_world") in ctx.worlds and e["validation_world"] not in worlds:
+        worlds.append(e["validation_world"])
+    return worlds
+
+
 def experiment_robustness(ctx: Context, out: Path, runs: dict, verbose: bool = True) -> dict:
     default = float(ctx.cfg["scan"]["noise_um"])
-    worlds = list(ctx.cfg["experiments"]["robustness_worlds"])
+    worlds = robust_worlds(ctx)
     summary = {"n_draws": int(ctx.cfg["experiments"]["robustness_draws"]), "worlds": {}}
     all_rows, all_finals = [], []
     finals_by_world = {}
@@ -1023,6 +1092,56 @@ def _crossing_records(rows: list[dict], n_passes: int, fixed: list[int]) -> list
     return recs
 
 
+def _decision_rules(rows: list[dict], n_passes: int, threshold: float) -> dict:
+    """Sequential abrasive-change decisions, scored against the true crossing.
+
+    After each scanned pass n a rule decides whether pass n+1 runs on fresh
+    abrasive. C: when its predicted probability that the crossing happens by
+    pass n+1 is at least 50% (median of its crossing distribution <= n+1).
+    D: when its point forecast is <= n+1. A: at its nominal crossing pass,
+    fixed in advance. R (reactive, no model): when the latest scan's mean
+    removal per newton falls below ``threshold`` times the first scan's.
+    The ideal change pass is the true crossing c (first pass whose starting
+    K < threshold * K0). Error = change pass - c (negative: early, abrasive
+    life wasted; positive: late, passes run on worn abrasive). A rule that has
+    not fired by the end of the run counts as changing at pass n_passes + 1
+    or later; only draws with c <= n_passes + 1 are scored, and changes
+    before pass n_passes + 1 on the other draws are counted as premature.
+    """
+    last = n_passes + 1
+    out = {}
+    per_rule: dict[str, list[tuple[int, int, bool]]] = {k: [] for k in ("C", "D", "A", "R")}
+    premature = {k: 0 for k in per_rule}
+    later_draws = 0
+    for rr in by_draw(rows).values():
+        c = int(rr[0]["cross_true"])
+        ref = rr[0]["scan_mean_um"] / rr[0]["force_N"]
+        change = {"A": int(rr[0]["cross_A"])}
+        for key, fired in (("C", lambda r: r["cross_C_median"] <= r["pass"] + 1),
+                           ("D", lambda r: r["cross_D"] <= r["pass"] + 1),
+                           ("R", lambda r: r["scan_mean_um"] / r["force_N"] < threshold * ref)):
+            change[key] = next((int(r["pass"]) + 1 for r in rr if fired(r)), None)
+        if c > last:
+            later_draws += 1
+            for k, v in change.items():
+                premature[k] += int(v is not None and v < last)
+            continue
+        for k, v in change.items():
+            per_rule[k].append((c, last if v is None else v, v is None))
+    for k, recs in per_rule.items():
+        if not recs:
+            continue
+        e = np.array([ch - c for c, ch, _ in recs], dtype=float)
+        out[k] = {"n": int(e.size), "mean_abs_err": float(np.mean(np.abs(e))), "exact": int(np.sum(e == 0)),
+                  "within_1": int(np.sum(np.abs(e) <= 1)), "late": int(np.sum(e > 0)), "early": int(np.sum(e < 0)),
+                  "mean_passes_late": float(np.mean(np.maximum(e, 0))),
+                  "mean_passes_early": float(np.mean(np.maximum(-e, 0))),
+                  "not_fired": int(sum(nf for _, _, nf in recs)),
+                  "premature_on_later_draws": int(premature[k])}
+    out["draws_crossing_after_run"] = later_draws
+    return out
+
+
 def _crossing_by_decision(recs: list[dict], labels: list[str]) -> dict:
     out = {}
     for label in labels:
@@ -1083,7 +1202,7 @@ def experiment_abrasive_change(ctx: Context, out: Path, runs: dict, verbose: boo
     labels = [f"after_pass_{p}" for p in fixed] + ["last_pass_before_crossing"]
     summary = {"threshold_fraction": ctx.threshold, "worlds": {}}
     all_recs, all_lead = [], []
-    for w in ctx.cfg["experiments"]["robustness_worlds"]:
+    for w in robust_worlds(ctx):
         rows = runs[("robustness", w, default)]
         recs = _crossing_records(rows, n_passes, fixed)
         crosses = [rr[0]["cross_true"] for rr in by_draw(rows).values()]
@@ -1094,6 +1213,7 @@ def experiment_abrasive_change(ctx: Context, out: Path, runs: dict, verbose: boo
             "true_crossings_within_experiment": int(sum(c <= n_passes for c in crosses)),
             "by_decision": _crossing_by_decision(recs, labels),
             "by_lead": lead,
+            "decision_rules": _decision_rules(rows, n_passes, ctx.threshold),
         }
         all_recs += recs
         all_lead += lead["rows"]
@@ -1102,7 +1222,15 @@ def experiment_abrasive_change(ctx: Context, out: Path, runs: dict, verbose: boo
     write_json(out / "abrasive_change.json", summary)
     if verbose:
         for w, s in summary["worlds"].items():
-            print(f"\nAbrasive-change prediction, {w} world (|predicted - true| crossing pass):")
+            dr = s["decision_rules"]
+            print(f"\nAbrasive-change decision rules, {w} world (change pass - true crossing):")
+            for k in ("C", "D", "A", "R"):
+                if k in dr:
+                    v = dr[k]
+                    print(f"  {k}: n={v['n']} mean |err| {v['mean_abs_err']:.2f}, exact {v['exact']}, within 1 {v['within_1']}, "
+                          f"late {v['late']} (mean {v['mean_passes_late']:.2f} passes), early {v['early']} "
+                          f"(mean {v['mean_passes_early']:.2f}); premature on later draws {v['premature_on_later_draws']}")
+            print(f"Abrasive-change prediction, {w} world (|predicted - true| crossing pass):")
             for label, v in s["by_decision"].items():
                 print(f"  {label:26s} n={v['n']:3d}  C median {v['abs_err_C_passes']['median']:.1f} "
                       f"(mean {v['mean_abs_err_C_passes']:.2f}, within 1: {v['within_1_pass_C']})  band coverage "

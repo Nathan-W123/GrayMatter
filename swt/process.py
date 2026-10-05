@@ -102,6 +102,9 @@ def make_schedule(forces: list[float], n_passes: int, rpm: float) -> list[PassAc
     return [PassAction(float(forces[i % len(forces)]), float(rpm)) for i in range(n_passes)]
 
 
+P_REF = 0.01   # MPa: reference pressure of the Preston exponent law (10 kPa)
+
+
 class ProcessModel:
     """Exact forward model for one pass: exposure, removal map, removed volume."""
 
@@ -110,6 +113,7 @@ class ProcessModel:
         self.path = path
         self.sander = sander
         self.contact = ContactGeometry(panel, path.stations, pad_radius)
+        self.pad_radius = float(pad_radius)
         # v * dt for every footprint point at the reference spindle speed.
         self.vdt = sander.speed(self.contact.r) * path.dt[self.contact.station_of_point]
         self.node_area_flat = panel.node_area.ravel()
@@ -121,17 +125,30 @@ class ProcessModel:
         return rpm / self.sander.spindle_rpm
 
     def line_exposures(self, force: float, k_pad: float, rpm: float | None = None,
-                       law: PadLaw = LINEAR) -> tuple[np.ndarray, np.ndarray]:
+                       law: PadLaw = LINEAR, alpha: float = 1.0, rings: int = 0) -> tuple[np.ndarray, np.ndarray]:
         """Exposure map of every raster line, (n_lines, n_pix) [N/mm], and each line's
-        removed volume per unit effectiveness [mm^3 per (mm^2/N)]."""
+        removed volume per unit effectiveness [mm^3 per (mm^2/N)].
+
+        ``alpha`` != 1: Preston's law with a pressure exponent, dh = K p_ref (p / p_ref)^alpha v dt
+        (p_ref = ``P_REF``). ``rings`` > 0: the contributions of ``rings`` equal-width
+        rings of the pad face are kept apart, shapes (rings, n_lines, n_pix) and
+        (rings, n_lines), for abrasive wear that varies across the pad.
+        """
         n = self.panel.n_pix
+        R = max(rings, 1)
+        shape = (R, self.n_lines) if rings else (self.n_lines,)
         if force <= 0:
-            return np.zeros((self.n_lines, n)), np.zeros(self.n_lines)
+            return np.zeros(shape + (n,)), np.zeros(shape)
         pts, p = self.contact.contact_points(force, k_pad, law)
         scale = 1.0 if rpm is None else self.speed_scale(rpm)
+        if alpha != 1.0:
+            p = P_REF * (p / P_REF) ** alpha
         flat = self.line_of_point[pts] * n + self.contact.idx[pts]
-        E = scale * np.bincount(flat, weights=p * self.vdt[pts], minlength=self.n_lines * n)
-        E = E.reshape(self.n_lines, n)
+        if rings:
+            ring = np.minimum((self.contact.r[pts] / self.pad_radius * R).astype(np.int64), R - 1)
+            flat = flat + ring * (self.n_lines * n)
+        E = scale * np.bincount(flat, weights=p * self.vdt[pts], minlength=R * self.n_lines * n)
+        E = E.reshape(shape + (n,))
         return E, E @ self.node_area_flat
 
     def exposure(self, force: float, k_pad: float, rpm: float | None = None,
@@ -151,6 +168,43 @@ class ProcessModel:
     def volume(self, removal_flat: np.ndarray) -> float:
         """Removed volume [mm^3]."""
         return float(removal_flat @ self.node_area_flat)
+
+
+def ring_effectiveness(K0: float, lam: float, u: np.ndarray, x_start: np.ndarray, fluct: float,
+                       wear: "WearLaw") -> np.ndarray:
+    """Line-averaged effectiveness of every ring of the pad face during a pass.
+
+    Ring r has used up x_r of abrasive (removed volume scaled to the whole pad,
+    see :func:`simulate_truth`) and its effectiveness is K0 * fluct * phi(x_r);
+    ``u`` (rings, n_lines) is each ring's removed volume per unit effectiveness in
+    each line, already scaled the same way. Single-stage law: exact closed form;
+    otherwise RK4 with 8 sub-steps per line. Returns (rings, n_lines).
+    """
+    u = np.atleast_2d(np.asarray(u, dtype=float))
+    x = np.asarray(x_start, dtype=float).copy()
+    K_start = K0 * fluct * wear.phi(lam, x)
+    if lam == 0:
+        return np.repeat(K_start[:, None], u.shape[1], axis=1)
+    if wear.kind == "single":
+        U_end = np.cumsum(u, axis=1)
+        U_start = U_end - u
+        dW = (np.log1p(lam * K_start[:, None] * U_end) - np.log1p(lam * K_start[:, None] * U_start)) / lam
+        return np.divide(dW, u, out=np.repeat(K_start[:, None], u.shape[1], axis=1), where=u > 0)
+    out = np.empty_like(u)
+
+    def rate(w):
+        return K0 * fluct * wear.phi(lam, w)
+
+    for i in range(u.shape[1]):
+        x0, h = x.copy(), u[:, i] / 8.0
+        for _ in range(8):
+            k1 = rate(x)
+            k2 = rate(x + 0.5 * h * k1)
+            k3 = rate(x + 0.5 * h * k2)
+            k4 = rate(x + h * k3)
+            x = x + h * (k1 + 2 * k2 + 2 * k3 + k4) / 6.0
+        out[:, i] = np.where(u[:, i] > 0, (x - x0) / np.where(u[:, i] > 0, u[:, i], 1.0), rate(x))
+    return out
 
 
 def line_effectiveness(K_start: float, lam: float, u_lines: np.ndarray, wear: "WearLaw" = None,
@@ -236,11 +290,11 @@ class WearLaw:
     fast_fraction: float = 0.25
     fast_ratio: float = 6.0
 
-    def phi(self, lam: float, W: float) -> float:
+    def phi(self, lam, W):
         if self.kind == "single":
-            return float(np.exp(-lam * W))
+            return np.exp(-lam * W)
         f, r = self.fast_fraction, self.fast_ratio
-        return float((1 - f) * np.exp(-lam * W) + f * np.exp(-r * lam * W))
+        return (1 - f) * np.exp(-lam * W) + f * np.exp(-r * lam * W)
 
 
 @dataclass(frozen=True)
@@ -253,6 +307,8 @@ class World:
     force_ripple: float = 0.0           # relative s.d. of the force of each raster line (force-control ripple)
     ripple_corr: float = 0.5            # correlation of the ripple between consecutive lines
     wear: WearLaw = WearLaw()
+    wear_rings: int = 1                 # > 1: abrasive wears ring by ring with its own local work
+    preston_exponent: float = 1.0       # removal ~ p^alpha
 
 
 MATCHED = World()
@@ -304,10 +360,18 @@ def simulate_truth(model: ProcessModel, truth: HiddenTruth, schedule: list[PassA
                    ripple_rng: np.random.Generator | None = None) -> TruthTrajectory:
     """Run the hidden process for the scheduled passes.
 
-    The state is the cumulative removed volume W and the accumulated log
-    fluctuation eps; the effectiveness at the start of a pass is
-    K = K0 * phi(W) * exp(eps). The trajectory continues past the last scanned
-    pass (repeating the schedule's force cycle) until the threshold crossing.
+    The pad face is split into ``world.wear_rings`` equal-width rings (1 = one
+    uniform abrasive). Ring r has removed a volume V_r so far; its abrasive has
+    been used as much as the whole pad would have after removing
+    x_r = (A_pad / A_r) V_r, so its effectiveness is K0 * phi(x_r) * exp(eps),
+    with phi the wear law and eps the accumulated log fluctuation. With one ring
+    this is the uniform law K = K0 * phi(W) * exp(eps). Rings that do more work
+    per unit area (the pad centre, for stiff pads) dull faster. The reported K
+    of a pass is the work-weighted mean of the rings' starting effectiveness
+    for that pass's contact pattern; the threshold crossing uses it. The
+    trajectory continues past the last scanned pass (repeating the schedule's
+    force cycle) until the threshold crossing.
+
     The oracle prediction for pass n uses the true physics and the true state
     at the start of pass n-1, but not the fluctuation drawn after it, nor the
     force ripple of pass n.
@@ -319,14 +383,18 @@ def simulate_truth(model: ProcessModel, truth: HiddenTruth, schedule: list[PassA
     """
     cache: dict[tuple[float, float], tuple] = {}
     h = 0.05
+    R = max(int(world.wear_rings), 1)
+    edges = np.linspace(0.0, 1.0, R + 1)
+    scale = 1.0 / (edges[1:] ** 2 - edges[:-1] ** 2)     # A_pad / A_ring
 
     def lines(a: PassAction):
         key = (a.force, a.rpm)
         if key not in cache:
             F = truth.force_gain * a.force
-            E, u = model.line_exposures(F, truth.k_pad, a.rpm, world.pad_law)
+            E, u = model.line_exposures(F, truth.k_pad, a.rpm, world.pad_law, world.preston_exponent, R)
             if world.force_ripple > 0:
-                E2, u2 = model.line_exposures(F * (1 + h), truth.k_pad, a.rpm, world.pad_law)
+                E2, u2 = model.line_exposures(F * (1 + h), truth.k_pad, a.rpm, world.pad_law,
+                                              world.preston_exponent, R)
                 cache[key] = (E, u, (E2 - E) / h, (u2 - u) / h)
             else:
                 cache[key] = (E, u, None, None)
@@ -342,38 +410,45 @@ def simulate_truth(model: ProcessModel, truth: HiddenTruth, schedule: list[PassA
             e[i] = r * e[i - 1] + np.sqrt(1 - r * r) * xi[i]
         return world.force_ripple * e
 
-    def run_pass(a: PassAction, W: float, fluct: float, e: np.ndarray | None = None):
+    def k_start(a: PassAction, V: np.ndarray, fluct: float) -> float:
+        """Work-weighted mean starting effectiveness of the rings for action a."""
+        _, u, _, _ = lines(a)
+        Kr = truth.K0 * world.wear.phi(truth.lam, scale * V) * fluct
+        wr = u.sum(axis=1)
+        return float(Kr @ wr / wr.sum()) if wr.sum() > 0 else float(Kr.mean())
+
+    def run_pass(a: PassAction, V: np.ndarray, fluct: float, e: np.ndarray | None = None):
         E, u, dE, du = lines(a)
         if e is not None:
-            E = E + e[:, None] * dE
-            u = u + e * du
-        K_start = truth.K0 * world.wear.phi(truth.lam, W) * fluct
-        K_l = line_effectiveness(K_start, truth.lam, u, world.wear, truth.K0, W, fluct)
-        return K_start, K_l @ E, float(K_l @ u)
+            E = E + e[None, :, None] * dE
+            u = u + e[None, :] * du
+        K_rl = ring_effectiveness(truth.K0, truth.lam, scale[:, None] * u, scale * V, fluct, world.wear)
+        dV = (K_rl * u).sum(axis=1)
+        return np.einsum("rl,rln->n", K_rl, E), dV
 
     n = len(schedule)
-    W, eps = 0.0, 0.0
+    V, eps = np.zeros(R), 0.0
     Ks, maps, vols, K_ext, oracle = [], [], [], [], []
     crossing = None
     eps_prev = None
     for i in range(n + max_extend):
-        K = truth.K0 * world.wear.phi(truth.lam, W) * np.exp(eps)
+        a = action_at(schedule, i)
+        K = k_start(a, V, np.exp(eps))
         if crossing is None and K < threshold * truth.K0:
             crossing = i + 1
         K_ext.append(K)
         if i >= n and crossing is not None:
             break
-        a = action_at(schedule, i)
-        K_start, removal, dV = run_pass(a, W, np.exp(eps), ripple())
+        removal, dV = run_pass(a, V, np.exp(eps), ripple())
         if i < n:
-            Ks.append(K_start)
+            Ks.append(K)
             maps.append(removal)
-            vols.append(dV)
+            vols.append(float(dV.sum()))
             # oracle: the true state at the start of the previous pass, without the fluctuation
             # drawn after it, and without this pass's force ripple (pass 1: the true initial state)
-            oracle.append(run_pass(a, W, np.exp(eps if i == 0 else eps_prev))[1])
+            oracle.append(run_pass(a, V, np.exp(eps if i == 0 else eps_prev))[0])
         eps_prev = eps
-        W += dV
+        V = V + dV
         eps += wear_sigma * rng.standard_normal()
     return TruthTrajectory(truth, np.array(Ks), np.array(maps), np.array(vols), crossing,
                            np.array(K_ext), np.array(oracle), world)

@@ -52,12 +52,11 @@ abrasive:
 filter:
   n_particles: 2000
   ess_fraction: 0.75              # tempering keeps ESS >= 75% of N
-  mcmc_sweeps: 2                  # Metropolis-Hastings rejuvenation sweeps after each scan
+  mcmc_sweeps: 1                  # full-path Metropolis-Hastings sweeps after each scan
   rate_drift: auto                # random-walk s.d. of log(lambda) per pass (0 = constant wear rate);
                                   # 'auto' = chosen by the tuning experiment on held-out draws
   rate_drift_fallback: 0.1        # used by stand-alone runs before any tuning exists
-  adaptive_wear_noise: true       # wear fluctuation level re-estimated from the filter's own K innovations
-  wear_noise_prior_passes: 4      # weight of priors.wear_sigma_log in that estimate [passes]
+  wear_noise_range: [0.005, 0.05] # log-uniform prior of the wear-fluctuation s.d. the tracker learns
   sigma_floor_um: 0.05
   surrogate_n_eta: 512
   robust: true                    # outlier rejection + noise inflation for structured residuals
@@ -67,15 +66,20 @@ filter:
   profile_offsets: true           # random offset per scan profile in the noise model (variance estimated)
 
 # Hidden-process worlds. "matched" (always present) is the tracker's own model.
-# "realistic" adds every mismatch below at once; each is also run on its own.
+# "realistic" adds every mismatch below at once; each group is also run on its own.
 worlds:
   realistic:
     pad: {kind: foam, thickness_mm: 15.0}        # foam stiffens as it densifies
+    removal: {preston_exponent: 0.8}              # removal ~ p^0.8 instead of p
     force:
       gain_sigma_log: 0.04                        # per-run force-calibration error (~4%)
       ripple: 0.03                                # force-control ripple: s.d. of each raster line's force
       ripple_corr: 0.5                            # AR(1) correlation of the ripple between lines
-    wear: {kind: two_stage, fast_fraction: 0.25, fast_ratio: 6.0}   # fast break-in + slow dulling
+    wear:
+      kind: two_stage                             # fast break-in + slow dulling
+      fast_fraction: 0.25
+      fast_ratio: 6.0
+      rings: 6                                    # abrasive wears ring by ring with its local work
     scan:
       registration_sigma_mm: 0.3                  # scan-to-part misalignment
       profile_bias_um: 0.5                        # per-profile offset
@@ -83,6 +87,24 @@ worlds:
       outlier_um: 15.0
       dropout_fraction: 0.02
       dropout_gap_points: 8
+      texture_um: 1.0                             # removal = difference of two height scans, each pass
+      texture_corr_mm: 1.0                        # leaves a new surface texture
+  # A second, harsher mismatch world, fixed (and committed) before any of its results were
+  # computed; it is never used for tuning or development.
+  realistic_b:
+    pad: {kind: foam, thickness_mm: 10.0}
+    removal: {preston_exponent: 0.7}
+    force: {gain_sigma_log: 0.06, ripple: 0.05, ripple_corr: 0.7}
+    wear: {kind: two_stage, fast_fraction: 0.4, fast_ratio: 4.0, rings: 6}
+    scan:
+      registration_sigma_mm: 0.5
+      profile_bias_um: 1.0
+      outlier_fraction: 0.01
+      outlier_um: 20.0
+      dropout_fraction: 0.05
+      dropout_gap_points: 12
+      texture_um: 1.5
+      texture_corr_mm: 1.5
 
 experiments:
   main_draw: typical             # 'typical' = the robustness draw at the median standardised distance from
@@ -91,6 +113,8 @@ experiments:
   early_pass: 2                   # pass shown as "early" in the removal-map figure
   robustness_draws: 100           # hidden truths per robustness world
   robustness_worlds: [matched, realistic]
+  validation_world: realistic_b   # the pre-registered second mismatch world
+  validation_draws: 50
   ablation_world: matched         # constant-force ablation (identifiability) in the tracker's own model
   noise_world: realistic
   noise_draws: 50                 # first draws of the noise world, re-run at every noise level

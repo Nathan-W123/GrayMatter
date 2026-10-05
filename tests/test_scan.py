@@ -39,3 +39,14 @@ def test_no_artefacts_is_plain_gaussian_noise(small_ctx):
     y = sc.observe(np.zeros(small_ctx.panel.n_pix), np.random.default_rng(2))
     assert np.all(np.isfinite(y))
     assert np.std(y) == pytest.approx(2e-3, rel=0.05)
+
+
+def test_surface_texture_enters_consecutive_scans_with_opposite_signs(small_ctx):
+    """Difference-of-scans model: error_n = T_(n-1) - T_n, so consecutive errors are
+    negatively correlated (-1/2 for an i.i.d. texture) and each has RMS sqrt(2) x texture."""
+    sc = Scanner(small_ctx.panel, 0.0, 1, ScanArtefacts(texture_um=1.0, texture_corr_mm=1.0))
+    rng = np.random.default_rng(4)
+    errs = [sc.observe(np.zeros(small_ctx.panel.n_pix), rng) for _ in range(6)]
+    assert np.std(errs[0]) * 1e3 == pytest.approx(np.sqrt(2), rel=0.1)
+    c = [np.corrcoef(errs[i], errs[i + 1])[0, 1] for i in range(5)]
+    assert np.mean(c) == pytest.approx(-0.5, abs=0.05)
