@@ -160,7 +160,7 @@ def test_particle_filter_wear_step_uses_each_particles_own_removed_volume(small_
     """advance(): K at the next pass = K / (1 + lambda K U), U = that particle's removed
     volume per unit effectiveness (exact within-pass wear of the single-stage law)."""
     m, pr = small_ctx.model, small_ctx.priors
-    pf = _pf(small_ctx, 0, wear_noise_range=(1e-12, 1e-12), rate_drift=0.0, n_particles=4)
+    pf = _pf(small_ctx, 0, wear_noise_range=(1e-12, 1e-12), rate_drift=0.0, force_exponent_sd=0.0, n_particles=4)
     ks = np.array([pr.k_low * 1.01, 0.01, 0.3, pr.k_high * 0.99])
     Ks = np.array([6e-5, 5e-5, 4e-5, 7e-5])
     lams = np.array([2e-4, 3e-4, 2.5e-4, 4e-4])
@@ -257,3 +257,22 @@ def test_full_path_sweeps_keep_the_path_diverse(small_ctx):
     sc = Scanner(small_ctx.panel, 2.0, small_ctx.cfg["scan"]["stride"])
     pf = _track(small_ctx, _pf(small_ctx, 5), traj, sc, np.random.default_rng(3), 2.0, passes=12)
     assert min(pf.ancestral_diversity(i) for i in range(12)) > 0.2 * pf.lk.size
+
+
+def test_force_exponent_is_learned(small_ctx):
+    """A truth whose removal scales as F^0.8 at fixed contact shape (simulated by scaling each
+    pass's removal by (F/F_ref)^-0.2): C's force exponent moves from its prior (1) towards 0.8,
+    and D's log-force regression finds it too."""
+    sched = small_ctx.schedule()
+    traj = simulate_truth(small_ctx.model, HiddenTruth(0.05, 6e-5, 2.0e-4), sched, 0.0, np.random.default_rng(1))
+    f = np.array([(a.force / 30.0) ** -0.2 for a in sched])
+    traj.removal = traj.removal * f[:, None]
+    sc = Scanner(small_ctx.panel, 2.0, small_ctx.cfg["scan"]["stride"])
+    pf = _track(small_ctx, _pf(small_ctx, 6), traj, sc, np.random.default_rng(2), 2.0, passes=10)
+    s = pf.summary()["beta"]
+    assert s["lo"] < 0.8 < s["hi"] and s["hi"] < 0.95
+    D = RefitEachPass(small_ctx.priors, small_ctx.table)
+    rng = np.random.default_rng(2)
+    for n, a in enumerate(sched[:10]):
+        D.update(sc.observe(traj.removal[n], rng), a)
+    assert D.gamma == pytest.approx(-0.2, abs=0.05)

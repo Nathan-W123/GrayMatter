@@ -35,7 +35,7 @@ def test_run_all_and_figures(tmp_path, capsys):
     main = on_disk["main_run"]["worlds"][on_disk["main_run"]["world"]]
     assert {"mean", "median", "lo", "hi"} <= set(main["C_final"]["k_pad"])
     assert set(on_disk["world_breakdown"]["worlds"]) == {"matched", "only_pad", "only_removal", "only_force",
-                                                         "only_wear", "only_scan", "realistic"}
+                                                         "only_wear", "only_scan", "realistic", "radial_wear"}
     assert on_disk["robustness"]["worlds"]["realistic_b"]["n_draws"] == 2
     assert {"C", "D", "A", "R"} <= set(on_disk["abrasive_change"]["worlds"]["realistic"]["decision_rules"])
     assert (res / "abrasive_change_by_lead.csv").exists()

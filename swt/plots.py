@@ -29,8 +29,9 @@ EST = {"A": ("A: nominal", GRAY), "B": ("B: calibrate-once", ORANGE), "D": ("D: 
        "C": ("C: joint tracker", BLUE)}
 WORLD_LABEL = {"matched": "matched world (tracker's own model)", "realistic": "realistic world (unmodelled effects)",
                "realistic_b": "second mismatch world (pre-registered)",
+               "radial_wear": "stress test: ring-wise wear",
                "only_pad": "foam pad only", "only_removal": "Preston exponent only", "only_force": "force errors only",
-               "only_wear": "abrasive wear only", "only_scan": "scanner effects only"}
+               "only_wear": "two-stage wear only", "only_scan": "scanner effects only"}
 
 
 def _truthy(v) -> bool:
@@ -222,7 +223,7 @@ def fig_rmse(res: Path, figdir: Path) -> None:
             ax.fill_between(passes, lo, hi, color=c, alpha=0.16, lw=0)
             ax.plot(passes, med, color=c, lw=2.6 if k == "C" else 1.9, label=lab)
             ends[k] = np.log10(med[-1])
-        for k, y in zip(ends, _dodge(list(ends.values()), 0.13)):
+        for k, y in zip(ends, _dodge(list(ends.values()), 0.22)):
             ax.annotate(k, (passes[-1], 10 ** y), xytext=(6, 0), textcoords="offset points", va="center",
                         color=INK, fontsize=13, fontweight="bold")
         ax.set_yscale("log")
@@ -439,7 +440,7 @@ def fig_mismatch(res: Path, figdir: Path) -> None:
     bx.set_ylim(0, 105)
     bx.set_xlabel("pass")
     bx.set_ylabel("truth inside C's 90% interval [%]")
-    bx.set_title("Next-pass mean removal: calibration")
+    bx.set_title("Calibration per pass")
     bx.legend(loc="lower right", fontsize=10.5)
     cx = axes[2]
     if tun:

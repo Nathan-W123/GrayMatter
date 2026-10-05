@@ -57,6 +57,7 @@ filter:
                                   # 'auto' = chosen by the tuning experiment on held-out draws
   rate_drift_fallback: 0.1        # used by stand-alone runs before any tuning exists
   wear_noise_range: [0.005, 0.05] # log-uniform prior of the wear-fluctuation s.d. the tracker learns
+  force_exponent_sd: 0.15         # prior s.d. of beta in removal ~ F^beta (Preston: beta = 1)
   sigma_floor_um: 0.05
   surrogate_n_eta: 512
   robust: true                    # outlier rejection + noise inflation for structured residuals
@@ -75,11 +76,7 @@ worlds:
       gain_sigma_log: 0.04                        # per-run force-calibration error (~4%)
       ripple: 0.03                                # force-control ripple: s.d. of each raster line's force
       ripple_corr: 0.5                            # AR(1) correlation of the ripple between lines
-    wear:
-      kind: two_stage                             # fast break-in + slow dulling
-      fast_fraction: 0.25
-      fast_ratio: 6.0
-      rings: 6                                    # abrasive wears ring by ring with its local work
+    wear: {kind: two_stage, fast_fraction: 0.25, fast_ratio: 6.0}   # fast break-in + slow dulling
     scan:
       registration_sigma_mm: 0.3                  # scan-to-part misalignment
       profile_bias_um: 0.5                        # per-profile offset
@@ -89,6 +86,10 @@ worlds:
       dropout_gap_points: 8
       texture_um: 1.0                             # removal = difference of two height scans, each pass
       texture_corr_mm: 1.0                        # leaves a new surface texture
+  # Stress test outside both model families: the abrasive wears ring by ring with its local
+  # work, so the pad centre of a stiff pad stops cutting and the removal map changes shape.
+  radial_wear:
+    wear: {kind: single, rings: 6}
   # A second, harsher mismatch world, fixed (and committed) before any of its results were
   # computed; it is never used for tuning or development.
   realistic_b:
@@ -117,9 +118,9 @@ experiments:
   validation_draws: 50
   ablation_world: matched         # constant-force ablation (identifiability) in the tracker's own model
   noise_world: realistic
-  noise_draws: 50                 # first draws of the noise world, re-run at every noise level
-  ablation_draws: 50              # first draws of the ablation world, re-run with constant force
-  breakdown_draws: 40             # first draws, re-run in each single-mismatch world
+  noise_draws: 40                 # first draws of the noise world, re-run at every noise level
+  ablation_draws: 40              # first draws of the ablation world, re-run with constant force
+  breakdown_draws: 30             # first draws, re-run in each single-mismatch and stress world
   noise_levels_um: [1.0, 2.0, 5.0, 10.0]
   crossing_decision_passes: [2, 5]
   contact_sweep_k: [1.0e-4, 30.0, 121]   # log-spaced k_pad sweep: [min, max, n]

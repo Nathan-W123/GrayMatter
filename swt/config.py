@@ -107,6 +107,8 @@ def build_context(cfg: dict) -> Context:
     pf = PFConfig(n_particles=int(f["n_particles"]), ess_fraction=float(f["ess_fraction"]),
                   wear_noise_range=tuple(float(v) for v in f.get("wear_noise_range", (0.005, 0.05))),
                   rate_drift=_drift(f), sigma_floor_um=float(f["sigma_floor_um"]),
+                  force_exponent_sd=float(f.get("force_exponent_sd", 0.15)),
+                  force_ref=float(cfg["pad"]["reference_force_N"]),
                   threshold=float(cfg["abrasive"]["threshold_fraction"]),
                   mcmc_sweeps=int(f.get("mcmc_sweeps", 1)), robust=bool(f.get("robust", True)),
                   outlier_z=float(f.get("outlier_z", 5.0)), inflation_block=int(f.get("inflation_block", 4)),

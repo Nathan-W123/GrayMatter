@@ -2,13 +2,13 @@
   "swt_version": "0.1.0",
   "python": "3.11.15",
   "numpy": "2.4.6",
-  "config_hash": "ac90959b035a",
-  "source_hash": "9bcf513fa351",
-  "experiment_seconds": 427.2,
-  "context_build_seconds": 7.2,
+  "config_hash": "c2d209a8ee43",
+  "source_hash": "be688e68cb0e",
+  "experiment_seconds": 511.7,
+  "context_build_seconds": 6.9,
   "workers": 4,
   "cpu_count": 4,
-  "episodes": 610,
+  "episodes": 630,
   "config": {
     "seed": 2026,
     "geometry": {
@@ -61,11 +61,14 @@
     "filter": {
       "n_particles": 2000,
       "ess_fraction": 0.75,
-      "mcmc_sweeps": 2,
-      "rate_drift": 0.05,
+      "mcmc_sweeps": 1,
+      "rate_drift": 0.1,
       "rate_drift_fallback": 0.1,
-      "adaptive_wear_noise": true,
-      "wear_noise_prior_passes": 4,
+      "wear_noise_range": [
+        0.005,
+        0.05
+      ],
+      "force_exponent_sd": 0.15,
       "sigma_floor_um": 0.05,
       "surrogate_n_eta": 512,
       "robust": true,
@@ -79,6 +82,9 @@
         "pad": {
           "kind": "foam",
           "thickness_mm": 15.0
+        },
+        "removal": {
+          "preston_exponent": 0.8
         },
         "force": {
           "gain_sigma_log": 0.04,
@@ -96,7 +102,45 @@
           "outlier_fraction": 0.005,
           "outlier_um": 15.0,
           "dropout_fraction": 0.02,
-          "dropout_gap_points": 8
+          "dropout_gap_points": 8,
+          "texture_um": 1.0,
+          "texture_corr_mm": 1.0
+        }
+      },
+      "radial_wear": {
+        "wear": {
+          "kind": "single",
+          "rings": 6
+        }
+      },
+      "realistic_b": {
+        "pad": {
+          "kind": "foam",
+          "thickness_mm": 10.0
+        },
+        "removal": {
+          "preston_exponent": 0.7
+        },
+        "force": {
+          "gain_sigma_log": 0.06,
+          "ripple": 0.05,
+          "ripple_corr": 0.7
+        },
+        "wear": {
+          "kind": "two_stage",
+          "fast_fraction": 0.4,
+          "fast_ratio": 4.0,
+          "rings": 6
+        },
+        "scan": {
+          "registration_sigma_mm": 0.5,
+          "profile_bias_um": 1.0,
+          "outlier_fraction": 0.01,
+          "outlier_um": 20.0,
+          "dropout_fraction": 0.05,
+          "dropout_gap_points": 12,
+          "texture_um": 1.5,
+          "texture_corr_mm": 1.5
         }
       }
     },
@@ -109,11 +153,13 @@
         "matched",
         "realistic"
       ],
+      "validation_world": "realistic_b",
+      "validation_draws": 50,
       "ablation_world": "matched",
       "noise_world": "realistic",
-      "noise_draws": 50,
-      "ablation_draws": 50,
-      "breakdown_draws": 40,
+      "noise_draws": 40,
+      "ablation_draws": 40,
+      "breakdown_draws": 30,
       "noise_levels_um": [
         1.0,
         2.0,

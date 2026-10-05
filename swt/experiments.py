@@ -146,7 +146,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
     nominal_cache = ctx.__dict__.setdefault("_nominal_cache", {})
     A = Nominal(ctx.model, ctx.priors, oi, nominal_cache)
     B = CalibrateOnce(ctx.model, ctx.priors, ctx.table, oi, nominal_cache) if full else None
-    D = RefitEachPass(ctx.priors, ctx.table) if full else None
+    D = RefitEachPass(ctx.priors, ctx.table, force_ref=float(cfg["pad"]["reference_force_N"])) if full else None
     C = ParticleFilter(ctx.table, ctx.priors, ctx.pf, rng_for(seed, pf_stream, draw),
                        rollout_rng=rng_for(seed, 5, draw), obs_shape=ctx.obs_shape)
     cross_A = A.crossing_pass(schedule, ctx.threshold)
@@ -635,8 +635,14 @@ def task_list(ctx: Context) -> list[tuple]:
     if e.get("validation_world") in ctx.worlds:
         tasks += [("robustness", e["validation_world"], d) for d in range(int(e.get("validation_draws", n)))]
     nb = int(e.get("breakdown_draws", 0))
-    tasks += [("breakdown", w, d) for d in range(nb) for w in ctx.worlds if w.startswith("only_")]
+    tasks += [("breakdown", w, d) for d in range(nb) for w in breakdown_extra_worlds(ctx)]
     return tasks
+
+
+def breakdown_extra_worlds(ctx: Context) -> list[str]:
+    """Worlds run only for the breakdown: one per mismatch group, plus stress tests."""
+    skip = set(ctx.cfg["experiments"]["robustness_worlds"]) | {ctx.cfg["experiments"].get("validation_world")}
+    return [w for w in ctx.worlds if w not in skip and w != "matched"]
 
 
 def tuning_tasks(ctx: Context) -> list[tuple]:
@@ -1245,11 +1251,12 @@ def experiment_breakdown(ctx: Context, out: Path, runs: dict, verbose: bool = Tr
     n_draws = int(e.get("breakdown_draws", 0))
     n_passes = ctx.cfg["schedule"]["n_passes"]
     fixed = [int(p) for p in e["crossing_decision_passes"]]
-    order = ["matched"] + [w for w in ctx.worlds if w.startswith("only_")] + ["realistic"]
+    order = ["matched"] + [w for w in ctx.worlds if w.startswith("only_")] + ["realistic"] + \
+        [w for w in breakdown_extra_worlds(ctx) if not w.startswith("only_")]
     summary = {"n_draws": n_draws, "worlds": {}}
     table = []
     for w in order:
-        key = ("breakdown", w, default) if w.startswith("only_") else ("robustness", w, default)
+        key = ("robustness", w, default) if w in ("matched", "realistic") else ("breakdown", w, default)
         if key not in runs:
             continue
         rows = [r for r in runs[key] if r["draw"] < n_draws]
