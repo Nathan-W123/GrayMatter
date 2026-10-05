@@ -1,0 +1,88 @@
+{
+  "swt_version": "0.1.0",
+  "python": "3.11.15",
+  "numpy": "2.4.6",
+  "config_hash": "a578908257d7",
+  "source_hash": "a7b107bc3444",
+  "experiment_seconds": 79.0,
+  "context_build_seconds": 8.9,
+  "workers": 4,
+  "cpu_count": 4,
+  "config": {
+    "seed": 2026,
+    "geometry": {
+      "length_x_mm": 200.0,
+      "width_y_mm": 150.0,
+      "radius_mm": 300.0,
+      "grid_mm": 1.0
+    },
+    "pad": {
+      "diameter_mm": 125.0,
+      "reference_force_N": 30.0
+    },
+    "sander": {
+      "spindle_rpm": 8000.0,
+      "orbit_diameter_mm": 5.0,
+      "pad_spin_ratio": 0.02
+    },
+    "path": {
+      "stepover_mm": 15.0,
+      "station_spacing_mm": 5.0,
+      "feed_mm_s": 25.0,
+      "dwell_s": 0.25,
+      "edge_margin_mm": 0.0
+    },
+    "schedule": {
+      "n_passes": 20,
+      "forces_N": [
+        20.0,
+        40.0
+      ],
+      "constant_force_N": 30.0,
+      "rpm": 8000.0
+    },
+    "scan": {
+      "noise_um": 2.0,
+      "stride": 2
+    },
+    "priors": {
+      "k_low": 0.00063,
+      "k_high": 5.0,
+      "K0_median": 6e-05,
+      "K0_sigma_log": 0.25,
+      "lam_median": 0.00025,
+      "lam_sigma_log": 0.35,
+      "wear_sigma_log": 0.01
+    },
+    "abrasive": {
+      "threshold_fraction": 0.5
+    },
+    "filter": {
+      "n_particles": 10000,
+      "ess_fraction": 0.75,
+      "shrinkage": 0.98,
+      "sigma_floor_um": 0.05,
+      "surrogate_n_eta": 512
+    },
+    "experiments": {
+      "main_draw": "typical",
+      "early_pass": 2,
+      "robustness_draws": 100,
+      "noise_levels_um": [
+        1.0,
+        2.0,
+        5.0,
+        10.0
+      ],
+      "crossing_decision_passes": [
+        2,
+        5
+      ],
+      "contact_sweep_k": [
+        0.0001,
+        30.0,
+        121
+      ]
+    }
+  }
+}

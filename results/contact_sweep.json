@@ -1,0 +1,28 @@
+{
+  "k_low": 0.00063,
+  "k_high": 5.0,
+  "reference_force_N": 30.0,
+  "grid_mm": 1.0,
+  "radius_mm": 300.0,
+  "contact_fraction_at_prior_bounds": {
+    "20N": {
+      "soft_k_low": 0.88974839182477,
+      "stiff_k_high": 0.05089162120348506
+    },
+    "30N": {
+      "soft_k_low": 0.9731292240045599,
+      "stiff_k_high": 0.05089162120348506
+    },
+    "40N": {
+      "soft_k_low": 1.0,
+      "stiff_k_high": 0.07124826968487909
+    }
+  },
+  "fine_grid_reference": {
+    "grid_mm": 0.25,
+    "soft_k_low": 0.9701916758777716,
+    "stiff_k_high": 0.05847056606272381,
+    "force_N": 30.0
+  },
+  "pad_face_area_mm2": 12271.846303085129
+}

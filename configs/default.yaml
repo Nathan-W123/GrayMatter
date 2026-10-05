@@ -1,0 +1,66 @@
+# sanding-wear-tracker default configuration.
+# Units: mm, N, s, MPa (= N/mm^2). k_pad in N/mm^3, K in mm^2/N (= 1/MPa), lambda in 1/mm^3.
+
+seed: 2026
+
+geometry:
+  length_x_mm: 200.0      # straight direction (cylinder axis)
+  width_y_mm: 150.0       # curved direction; > pad diameter so the pad can sit fully on the panel
+  radius_mm: 300.0        # cylinder radius (convex); pad sag at its rim ~6.6 mm
+  grid_mm: 1.0
+
+pad:
+  diameter_mm: 125.0
+  reference_force_N: 30.0         # force at which the 5%-97% contact range is defined
+
+sander:
+  spindle_rpm: 8000.0
+  orbit_diameter_mm: 5.0
+  pad_spin_ratio: 0.02            # free pad rotation as a fraction of spindle speed
+
+path:
+  stepover_mm: 15.0
+  station_spacing_mm: 5.0
+  feed_mm_s: 25.0
+  dwell_s: 0.25                   # extra time at each line end (turnaround)
+  edge_margin_mm: 0.0             # pad centre runs all the way to the panel edge
+
+schedule:
+  n_passes: 20
+  forces_N: [20.0, 40.0]          # cycled pass by pass (low/high alternation)
+  constant_force_N: 30.0          # ablation: same mean force on every pass
+  rpm: 8000.0
+
+scan:
+  noise_um: 2.0
+  stride: 2                       # keep every 2nd grid node in x and y (2 mm sampling)
+
+priors:
+  # k_pad bounds chosen so contact spans ~97% (soft) to ~5% (stiff) of the pad
+  # face at the reference force on the default geometry (see contact sweep).
+  k_low: 6.3e-4
+  k_high: 5.0
+  K0_median: 6.0e-5               # mm^2/N  (6e-11 1/Pa); ~8-16 um per pass at 20-40 N when fresh
+  K0_sigma_log: 0.25
+  lam_median: 2.5e-4              # 1/mm^3; K < 50% K0 from pass ~12 under nominal parameters
+  lam_sigma_log: 0.35
+  wear_sigma_log: 0.01            # random wear fluctuation per pass (truth and filter)
+
+abrasive:
+  threshold_fraction: 0.5         # change abrasive when K < 0.5 * K0
+
+filter:
+  n_particles: 10000
+  ess_fraction: 0.75              # tempering keeps ESS >= 75% of N (chosen on held-out draws 200-299)
+  shrinkage: 0.98
+  sigma_floor_um: 0.05
+  surrogate_n_eta: 512
+
+experiments:
+  main_draw: typical             # 'typical' = the robustness draw at the median standardised distance from
+                                  # the prior centre (uses the truths only); or an integer draw id
+  early_pass: 2                   # pass shown as "early" in the removal-map figure
+  robustness_draws: 100
+  noise_levels_um: [1.0, 2.0, 5.0, 10.0]
+  crossing_decision_passes: [2, 5]
+  contact_sweep_k: [1.0e-4, 30.0, 121]   # log-spaced k_pad sweep: [min, max, n]

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sanding-wear-tracker"
+version = "0.1.0"
+description = "Joint pad-stiffness and abrasive-wear tracking for robotic sanding (simulation study)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["numpy", "scipy", "matplotlib", "pyyaml"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools]
+packages = ["swt"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
