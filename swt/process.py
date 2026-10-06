@@ -125,7 +125,8 @@ class ProcessModel:
         return rpm / self.sander.spindle_rpm
 
     def line_exposures(self, force: float, k_pad: float, rpm: float | None = None,
-                       law: PadLaw = LINEAR, alpha: float = 1.0, rings: int = 0) -> tuple[np.ndarray, np.ndarray]:
+                       law: PadLaw = LINEAR, alpha: float = 1.0, rings: int = 0,
+                       tilt_stiffness: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
         """Exposure map of every raster line, (n_lines, n_pix) [N/mm], and each line's
         removed volume per unit effectiveness [mm^3 per (mm^2/N)].
 
@@ -133,13 +134,20 @@ class ProcessModel:
         (p_ref = ``P_REF``). ``rings`` > 0: the contributions of ``rings`` equal-width
         rings of the pad face are kept apart, shapes (rings, n_lines, n_pix) and
         (rings, n_lines), for abrasive wear that varies across the pad.
+        ``tilt_stiffness`` > 0: the pad holder tilts (linear pad only; see
+        :meth:`ContactGeometry.tilt_solution`).
         """
         n = self.panel.n_pix
         R = max(rings, 1)
         shape = (R, self.n_lines) if rings else (self.n_lines,)
         if force <= 0:
             return np.zeros(shape + (n,)), np.zeros(shape)
-        pts, p = self.contact.contact_points(force, k_pad, law)
+        if tilt_stiffness > 0:
+            if law.kind != "linear":
+                raise ValueError("the tilting holder is implemented for the linear pad law only")
+            pts, p = self.contact.tilted_contact_points(force, k_pad, tilt_stiffness)
+        else:
+            pts, p = self.contact.contact_points(force, k_pad, law)
         scale = 1.0 if rpm is None else self.speed_scale(rpm)
         if alpha != 1.0:
             p = P_REF * (p / P_REF) ** alpha
@@ -309,6 +317,10 @@ class World:
     wear: WearLaw = WearLaw()
     wear_rings: int = 1                 # > 1: abrasive wears ring by ring with its own local work
     preston_exponent: float = 1.0       # removal ~ p^alpha
+    loading_max: float = 0.0            # abrasive loading (clogging): largest fractional loss of cutting
+    loading_volume: float = 50.0        # removed volume [mm^3] over which loading builds up (e-folding)
+    loading_clean: float = 0.5          # fraction of the loading shed between passes
+    tilt_stiffness: float = 0.0         # > 0: pad holder tilts with this rotational stiffness [N mm/rad]
 
 
 MATCHED = World()
@@ -376,6 +388,17 @@ def simulate_truth(model: ProcessModel, truth: HiddenTruth, schedule: list[PassA
     at the start of pass n-1, but not the fluctuation drawn after it, nor the
     force ripple of pass n.
 
+    Abrasive loading (``world.loading_max`` > 0): swarf clogs the abrasive while it
+    cuts. A loading state L multiplies the effectiveness of each raster line by
+    (1 - L); along a pass L grows towards ``loading_max`` with the removed volume
+    (e-folding volume ``loading_volume``), and between passes a fraction
+    ``loading_clean`` of it is shed. Loading is temporary, so the reported K and
+    the abrasive-change threshold refer to the wear alone.
+
+    Tilting holder (``world.tilt_stiffness`` > 0): the pad tilts against a rotational
+    spring until the pressure moment balances it, which moves pressure towards an
+    overhanging edge (linear pad law only).
+
     Force ripple (``world.force_ripple`` > 0): raster line l of a pass runs at
     force F (1 + e_l), with e_l an AR(1) sequence along the pass. Its effect on
     the line exposures is applied to first order, using the derivative of the
@@ -391,10 +414,11 @@ def simulate_truth(model: ProcessModel, truth: HiddenTruth, schedule: list[PassA
         key = (a.force, a.rpm)
         if key not in cache:
             F = truth.force_gain * a.force
-            E, u = model.line_exposures(F, truth.k_pad, a.rpm, world.pad_law, world.preston_exponent, R)
+            E, u = model.line_exposures(F, truth.k_pad, a.rpm, world.pad_law, world.preston_exponent, R,
+                                        world.tilt_stiffness)
             if world.force_ripple > 0:
                 E2, u2 = model.line_exposures(F * (1 + h), truth.k_pad, a.rpm, world.pad_law,
-                                              world.preston_exponent, R)
+                                              world.preston_exponent, R, world.tilt_stiffness)
                 cache[key] = (E, u, (E2 - E) / h, (u2 - u) / h)
             else:
                 cache[key] = (E, u, None, None)
@@ -417,17 +441,22 @@ def simulate_truth(model: ProcessModel, truth: HiddenTruth, schedule: list[PassA
         wr = u.sum(axis=1)
         return float(Kr @ wr / wr.sum()) if wr.sum() > 0 else float(Kr.mean())
 
-    def run_pass(a: PassAction, V: np.ndarray, fluct: float, e: np.ndarray | None = None):
+    def run_pass(a: PassAction, V: np.ndarray, fluct: float, e: np.ndarray | None = None, L: float = 0.0):
         E, u, dE, du = lines(a)
         if e is not None:
             E = E + e[None, :, None] * dE
             u = u + e[None, :] * du
         K_rl = ring_effectiveness(truth.K0, truth.lam, scale[:, None] * u, scale * V, fluct, world.wear)
+        if world.loading_max > 0:     # loading builds up line by line with the removed volume
+            Lm, VL = world.loading_max, world.loading_volume
+            for li in range(K_rl.shape[1]):
+                K_rl[:, li] *= 1.0 - L
+                L = Lm - (Lm - L) * np.exp(-float(K_rl[:, li] @ u[:, li]) / VL)
         dV = (K_rl * u).sum(axis=1)
-        return np.einsum("rl,rln->n", K_rl, E), dV
+        return np.einsum("rl,rln->n", K_rl, E), dV, L
 
     n = len(schedule)
-    V, eps = np.zeros(R), 0.0
+    V, eps, L = np.zeros(R), 0.0, 0.0
     Ks, maps, vols, K_ext, oracle = [], [], [], [], []
     crossing = None
     eps_prev = None
@@ -439,16 +468,18 @@ def simulate_truth(model: ProcessModel, truth: HiddenTruth, schedule: list[PassA
         K_ext.append(K)
         if i >= n and crossing is not None:
             break
-        removal, dV = run_pass(a, V, np.exp(eps), ripple())
+        removal, dV, L_end = run_pass(a, V, np.exp(eps), ripple(), L)
         if i < n:
             Ks.append(K)
             maps.append(removal)
             vols.append(float(dV.sum()))
             # oracle: the true state at the start of the previous pass, without the fluctuation
-            # drawn after it, and without this pass's force ripple (pass 1: the true initial state)
-            oracle.append(run_pass(a, V, np.exp(eps if i == 0 else eps_prev))[0])
+            # drawn after it, and without this pass's force ripple (pass 1: the true initial state);
+            # it knows the abrasive's loading at the start of the pass
+            oracle.append(run_pass(a, V, np.exp(eps if i == 0 else eps_prev), None, L)[0])
         eps_prev = eps
         V = V + dV
+        L = (1.0 - world.loading_clean) * L_end     # loading partly shed between passes
         eps += wear_sigma * rng.standard_normal()
     return TruthTrajectory(truth, np.array(Ks), np.array(maps), np.array(vols), crossing,
                            np.array(K_ext), np.array(oracle), world)

@@ -99,3 +99,29 @@ def test_foam_pad_force_balance_and_contact(small_ctx, force, k_pad):
     foam = PadLaw("foam", 15.0)
     assert np.allclose(cg.station_force(force, k_pad, foam), force, rtol=1e-9)
     assert np.all(cg.contact_fraction(force, k_pad, foam) <= cg.contact_fraction(force, k_pad) + 1e-12)
+
+
+@pytest.mark.parametrize("k_pad", [0.001, 0.05, 2.0])
+def test_tilting_holder_balances_force_and_moment(small_ctx, k_pad):
+    """Force and moment balance of the tilting holder; a very stiff holder is the rigid pad;
+    at the panel corner the tilt moves the pressure centroid towards the overhanging edge."""
+    cg, F, kt = small_ctx.model.contact, 30.0, 2.0e4
+    u, v = cg.plane_coords
+    d, a, b = cg.tilt_solution(F, k_pad, kt)
+    pts, p = cg.tilted_contact_points(F, k_pad, kt)
+    st = cg.station_of_point[pts]
+    w = p * cg.area[pts]
+    n = cg.n_stations
+    np.testing.assert_allclose(np.bincount(st, w, n), F, rtol=1e-8)
+    np.testing.assert_allclose(np.bincount(st, w * u[pts], n), -kt * a, atol=1e-6 * F)
+    np.testing.assert_allclose(np.bincount(st, w * v[pts], n), -kt * b, atol=1e-6 * F)
+    d_rigid, a_rigid, _ = cg.tilt_solution(F, k_pad, 1e12)
+    np.testing.assert_allclose(d_rigid, cg.penetration(F / k_pad), atol=1e-6)
+    assert np.max(np.abs(a_rigid)) < 1e-8
+    corner = 0                                   # the first station sits at a panel corner
+    sel = st == corner
+    rigid_pts, rigid_p = cg.contact_points(F, k_pad)
+    rsel = cg.station_of_point[rigid_pts] == corner
+    cu_tilt = np.sum(w[sel] * u[pts][sel]) / F
+    cu_rigid = np.sum(rigid_p[rsel] * cg.area[rigid_pts][rsel] * u[rigid_pts][rsel]) / F
+    assert abs(cu_tilt) < abs(cu_rigid)

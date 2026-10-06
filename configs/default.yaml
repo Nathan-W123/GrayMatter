@@ -48,6 +48,7 @@ priors:
 
 abrasive:
   threshold_fraction: 0.5         # change abrasive when K < 0.5 * K0
+  cost_ratios: [1, 3, 19]         # late / early cost ratios of the abrasive-change decision (C: thresholds 1/(1+r))
   risk_quantile: 0.25             # cost-aware change rule: P(crossed by next pass) >= 0.25, the Bayes
                                   # decision when a worn pass costs 3x a pass of abrasive life
 
@@ -79,7 +80,11 @@ worlds:
       gain_sigma_log: 0.04                        # per-run force-calibration error (~4%)
       ripple: 0.03                                # force-control ripple: s.d. of each raster line's force
       ripple_corr: 0.5                            # AR(1) correlation of the ripple between lines
-    wear: {kind: two_stage, fast_fraction: 0.25, fast_ratio: 6.0}   # fast break-in + slow dulling
+    wear:                                         # abrasive behaviour
+      kind: two_stage                             # fast break-in + slow dulling
+      fast_fraction: 0.25
+      fast_ratio: 6.0
+      rings: 2                                    # inner and outer half of the pad face wear apart
     scan:
       registration_sigma_mm: 0.3                  # scan-to-part misalignment
       profile_bias_um: 0.5                        # per-profile offset
@@ -93,6 +98,14 @@ worlds:
   # work, so the pad centre of a stiff pad stops cutting and the removal map changes shape.
   radial_wear:
     wear: {kind: single, rings: 6}
+  # Stress test: the pad holder tilts (rotational stiffness 2e4 N mm/rad, ~350 N mm per degree)
+  # until the pressure moment balances it, which pushes pressure towards overhanging edges.
+  edge_tilt:
+    pad: {tilt_stiffness_Nmm_per_rad: 2.0e4}
+  # Stress test: abrasive loading (clogging). Up to 15% less cutting while loaded, building up
+  # over ~50 mm^3 of removal along a pass; half of it is shed between passes.
+  loading:
+    wear: {loading_max: 0.15, loading_volume_mm3: 50.0, loading_clean: 0.5}
   # A second, harsher mismatch world, fixed (and committed) before any of its results were
   # computed; it is never used for tuning or development.
   realistic_b:
@@ -139,13 +152,13 @@ experiments:
   noise_world: realistic
   noise_draws: 20                 # first draws of the noise world, re-run at every noise level
   ablation_draws: 25              # first draws of the ablation world, re-run with constant force
-  breakdown_draws: 20             # first draws, re-run in each single-mismatch and stress world
-  noise_levels_um: [1.0, 2.0, 5.0, 10.0]
+  breakdown_draws: 16             # first draws, re-run in each single-mismatch and stress world
+  noise_levels_um: [2.0, 5.0, 10.0]
   crossing_decision_passes: [2, 5]
   contact_sweep_k: [1.0e-4, 30.0, 121]   # log-spaced k_pad sweep: [min, max, n]
 
 # Hyperparameter tuning on held-out draws (ids outside every experiment's range).
 tuning:
-  draws: [200, 220]               # [first, last + 1]
+  draws: [200, 216]               # [first, last + 1]
   worlds: [matched, realistic]
   rate_drift: [0.0, 0.05, 0.1, 0.15]

@@ -96,7 +96,7 @@
       "force_ripple": 0.03,
       "ripple_corr": 0.5,
       "wear_law": "two_stage",
-      "wear_rings": 1,
+      "wear_rings": 2,
       "preston_exponent": 0.8,
       "scan_artefacts": {
         "registration_sigma_mm": 0.3,
@@ -160,6 +160,23 @@
           "stiff_k_high": 0.6966699578730838
         },
         "soft_over_stiff_volume_ratio": 1.7267080546071403
+      },
+      "radial_wear": {
+        "rings": 2,
+        "K_over_K0_at_last_pass_nominal": {
+          "soft_k_low": {
+            "rings": 0.31587053598071324,
+            "uniform": 0.3177198987044341
+          },
+          "mid": {
+            "rings": 0.29712998260074475,
+            "uniform": 0.32057098423812463
+          },
+          "stiff_k_high": {
+            "rings": 0.2950551997123084,
+            "uniform": 0.320771917292337
+          }
+        }
       }
     },
     "radial_wear": {
@@ -195,6 +212,71 @@
             "rings": 0.3314510017152749,
             "uniform": 0.36970933082801605
           }
+        }
+      }
+    },
+    "edge_tilt": {
+      "pad_law": "linear",
+      "force_gain_sigma_log": 0.0,
+      "force_ripple": 0.0,
+      "ripple_corr": 0.5,
+      "wear_law": "single",
+      "wear_rings": 1,
+      "preston_exponent": 1.0,
+      "scan_artefacts": {
+        "registration_sigma_mm": 0.0,
+        "profile_bias_um": 0.0,
+        "outlier_fraction": 0.0,
+        "outlier_um": 15.0,
+        "dropout_fraction": 0.0,
+        "dropout_gap_points": 8,
+        "texture_um": 0.0,
+        "texture_corr_mm": 1.0
+      },
+      "tilt": {
+        "stiffness_Nmm_per_rad": 20000.0,
+        "force_N": 40.0,
+        "at_max_force": {
+          "soft_k_low": {
+            "max_tilt_deg": 4.155999210257981,
+            "map_change_rel_rms": 0.04769240103768102
+          },
+          "mid": {
+            "max_tilt_deg": 2.0594562052879564,
+            "map_change_rel_rms": 0.3706852567733366
+          },
+          "stiff_k_high": {
+            "max_tilt_deg": 0.6681942232426565,
+            "map_change_rel_rms": 0.7301357786599051
+          }
+        }
+      }
+    },
+    "loading": {
+      "pad_law": "linear",
+      "force_gain_sigma_log": 0.0,
+      "force_ripple": 0.0,
+      "ripple_corr": 0.5,
+      "wear_law": "single",
+      "wear_rings": 1,
+      "preston_exponent": 1.0,
+      "scan_artefacts": {
+        "registration_sigma_mm": 0.0,
+        "profile_bias_um": 0.0,
+        "outlier_fraction": 0.0,
+        "outlier_um": 15.0,
+        "dropout_fraction": 0.0,
+        "dropout_gap_points": 8,
+        "texture_um": 0.0,
+        "texture_corr_mm": 1.0
+      },
+      "loading": {
+        "max": 0.15,
+        "volume_mm3": 50.0,
+        "clean": 0.5,
+        "volume_loss_nominal": {
+          "pass_1": 0.10945164744804459,
+          "last_pass": 0.04720842481439336
         }
       }
     },
@@ -479,7 +561,7 @@
       "force_ripple": 0.0,
       "ripple_corr": 0.5,
       "wear_law": "two_stage",
-      "wear_rings": 1,
+      "wear_rings": 2,
       "preston_exponent": 1.0,
       "scan_artefacts": {
         "registration_sigma_mm": 0.0,
@@ -502,6 +584,23 @@
         "K_over_K0_after_first_pass": {
           "single": 0.940883098578072,
           "two_stage": 0.8791042197474903
+        }
+      },
+      "radial_wear": {
+        "rings": 2,
+        "K_over_K0_at_last_pass_nominal": {
+          "soft_k_low": {
+            "rings": 0.31587053598071324,
+            "uniform": 0.3177198987044341
+          },
+          "mid": {
+            "rings": 0.29712998260074475,
+            "uniform": 0.32057098423812463
+          },
+          "stiff_k_high": {
+            "rings": 0.2950551997123084,
+            "uniform": 0.320771917292337
+          }
         }
       }
     },

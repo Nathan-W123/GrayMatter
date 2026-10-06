@@ -294,3 +294,21 @@ def test_transient_gain_is_told_apart_from_wear(small_ctx):
     s = _track(small_ctx, _pf(small_ctx, 8), traj, sc, np.random.default_rng(2), 2.0).summary()
     assert s["transient_noise"] > 0.02
     assert s["wear_noise"] < s["transient_noise"]
+
+
+def test_refit_baseline_uses_the_priors_with_few_scans(small_ctx):
+    """With removal proportional to F^0.8, two scans at 20 and 40 N differ by a force effect
+    that an unpenalised fit would read as wear (a wear rate several times too high); D's
+    MAP fit with C's priors keeps the wear rate near its prior and splits the difference."""
+    sched = small_ctx.schedule()
+    traj = simulate_truth(small_ctx.model, HiddenTruth(0.05, 6e-5, 2.0e-4), sched, 0.0, np.random.default_rng(1))
+    f = np.array([(a.force / 30.0) ** -0.2 for a in sched])
+    traj.removal = traj.removal * f[:, None]
+    sc = Scanner(small_ctx.panel, 2.0, small_ctx.cfg["scan"]["stride"])
+    D = RefitEachPass(small_ctx.priors, small_ctx.table)
+    rng = np.random.default_rng(2)
+    D.update(sc.observe(traj.removal[0], rng), sched[0])
+    assert D.lam == pytest.approx(small_ctx.priors.lam_median) and abs(D.gamma) < 1e-9
+    D.update(sc.observe(traj.removal[1], rng), sched[1])
+    assert 0.5 * small_ctx.priors.lam_median < D.lam < 2.0 * small_ctx.priors.lam_median
+    assert -0.2 < D.gamma < 0.0

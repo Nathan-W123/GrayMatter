@@ -135,9 +135,16 @@ def regions(ctx: Context, blocks: tuple[int, int] = (4, 4)):
     return ctx.__dict__["_regions"]
 
 
+def d_obs_sd(pf) -> float:
+    """Noise of D's log K_i in its wear fit: C's prior median wear-fluctuation and transient levels."""
+    gm = lambda r: float(np.sqrt(r[0] * r[1])) if r[0] > 0 else float(r[1]) / 2
+    return max(float(np.hypot(gm(pf.wear_noise_range), gm(pf.transient_range))), 1e-3)
+
+
 def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: str = "alternating",
                 noise_um: float | None = None, experiment: str = "", record_maps: tuple[int, ...] = (),
-                traj=None, full: bool = True, pf_stream: int = 4) -> tuple[list[dict], dict]:
+                traj=None, full: bool = True, pf_stream: int = 4, with_D: bool | None = None,
+                risk: bool = True) -> tuple[list[dict], dict]:
     """Run all estimators through one sequence of passes on one hidden truth.
 
     Each pass: (1) every estimator predicts the removal map of the coming pass
@@ -150,6 +157,8 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
     abrasive-change predictions.
     ``pf_stream`` selects the particle filter's random stream (a different value
     re-runs the identical problem with a different Monte Carlo seed).
+    ``with_D`` runs baseline D even when ``full`` is False (tuning of its decision margin);
+    ``risk=False`` skips C's second crossing quantile (only the decision rules use it).
     """
     cfg = ctx.cfg
     seed = cfg["seed"]
@@ -165,7 +174,9 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
     nominal_cache = ctx.__dict__.setdefault("_nominal_cache", {})
     A = Nominal(ctx.model, ctx.priors, oi, nominal_cache)
     B = CalibrateOnce(ctx.model, ctx.priors, ctx.table, oi, nominal_cache) if full else None
-    D = RefitEachPass(ctx.priors, ctx.table, force_ref=float(cfg["pad"]["reference_force_N"])) if full else None
+    use_D = full if with_D is None else with_D
+    D = RefitEachPass(ctx.priors, ctx.table, force_ref=float(cfg["pad"]["reference_force_N"]),
+                      force_exponent_sd=ctx.pf.force_exponent_sd, obs_sd=d_obs_sd(ctx.pf)) if use_D else None
     C = ParticleFilter(ctx.table, ctx.priors, ctx.pf, rng_for(seed, pf_stream, draw),
                        rollout_rng=rng_for(seed, 5, draw), obs_shape=ctx.obs_shape)
     cross_A = A.crossing_pass(schedule, ctx.threshold)
@@ -182,7 +193,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
         # oracle: true physics and the true state after the previous pass, but not the
         # wear fluctuation drawn after it (pass 1: the true initial state)
         preds = {"A": A.predict(action), "B": B.predict(action) if full else None, "C": C.predict(action),
-                 "D": D.predict(action) if full else None, "oracle": traj.oracle[n][oi]}
+                 "D": D.predict(action) if use_D else None, "oracle": traj.oracle[n][oi]}
         p_lo, p_med, p_hi = C.predict_mean_removal(action)
         true_mean = float(true_obs.mean())
         reg_q = C.predict_region_removal(action, region_tables)
@@ -192,13 +203,15 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
         A.update(scan, action)
         if full:
             B.update(scan, action)
+        if use_D:
             D.update(scan, action)
         C.update(scan, action, noise)
         s = C.summary()
         cr = (C.predict_crossing(n + 1, schedule, ctx.threshold) if full
               else {"median": nan, "lo": nan, "hi": nan, "band_mass": nan})
         q_risk = ctx.cfg["abrasive"].get("risk_quantile", 0.25)
-        cr_risk = C.predict_crossing(n + 1, schedule, ctx.threshold, q=(q_risk, 1 - q_risk))["lo"] if full else nan
+        cr_risk = (C.predict_crossing(n + 1, schedule, ctx.threshold, q=(q_risk, 1 - q_risk))["lo"]
+                   if full and risk else nan)
         row = {
             "experiment": experiment, "world": world, "schedule": schedule_kind, "noise_um": noise, "draw": draw,
             "pass": n + 1, "force_N": action.force, "rpm": action.rpm,
@@ -208,7 +221,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
             "rmse_A_um": rmse_um(preds["A"], true_obs),
             "rmse_B_um": rmse_um(preds["B"], true_obs) if full else nan,
             "rmse_C_um": rmse_um(preds["C"], true_obs),
-            "rmse_D_um": rmse_um(preds["D"], true_obs) if full else nan,
+            "rmse_D_um": rmse_um(preds["D"], true_obs) if use_D else nan,
             "rmse_oracle_um": rmse_um(preds["oracle"], true_obs),
             "C_pred_mean_lo_um": float(p_lo) * UM, "C_pred_mean_median_um": float(p_med) * UM,
             "C_pred_mean_hi_um": float(p_hi) * UM, "C_pred_mean_inside": bool(p_lo <= true_mean <= p_hi),
@@ -221,10 +234,11 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
             "C_corr_logk_logK": s["corr_logk_logK"], "C_stages": s["stages"],
             "C_sigma_um": s["sigma_um"], "C_profile_sd_um": s["profile_sd_um"], "C_wear_noise": s["wear_noise"], "C_transient_noise": s["transient_noise"], "C_min_path_diversity": s["min_path_diversity"], "C_outliers": s["outliers"], "C_redone": bool(s["redone"]),
             "B_k_pad": B.k_pad if full else nan, "B_K": B.K if full else nan,
-            "D_k_pad": D.k_pad if full else nan, "D_K": D.K if full else nan, "D_lam": D.lam if full else nan,
+            "D_k_pad": D.k_pad if use_D else nan, "D_K": D.K if use_D else nan, "D_lam": D.lam if use_D else nan,
+            "D_next_ratio": D.next_ratio() if use_D else nan,
             "cross_C_median": cr["median"], "cross_C_lo": cr["lo"], "cross_C_hi": cr["hi"],
             "cross_C_band_mass": cr["band_mass"], "cross_C_risk": cr_risk,
-            "cross_D": D.crossing_pass(n + 1, schedule, ctx.threshold) if full else nan,
+            "cross_D": D.crossing_pass(n + 1, schedule, ctx.threshold) if use_D else nan,
             "cross_A": cross_A, "cross_true": traj.crossing_pass,
         })
         rows.append(row)
@@ -431,6 +445,28 @@ def _world_info(ctx: Context, cg: ContactGeometry, forces: list[float], nom: dic
                                      world=World("u", wear=w.wear))
                 k20[lab] = {"rings": float(rings.K[-1] / nom["K0"]), "uniform": float(uni.K[-1] / nom["K0"])}
             d["radial_wear"] = {"rings": w.wear_rings, "K_over_K0_at_last_pass_nominal": k20}
+        if w.loading_max > 0:
+            from .process import World
+            sched = ctx.schedule()
+            truth = HiddenTruth(nom["k_pad"], nom["K0"], nom["lam"])
+            base = World("b", wear=w.wear, wear_rings=w.wear_rings)
+            load = World("l", wear=w.wear, wear_rings=w.wear_rings, loading_max=w.loading_max,
+                         loading_volume=w.loading_volume, loading_clean=w.loading_clean)
+            v0 = simulate_truth(ctx.model, truth, sched, 0.0, rng_for(0, 0), max_extend=0, world=base).volume
+            v1 = simulate_truth(ctx.model, truth, sched, 0.0, rng_for(0, 0), max_extend=0, world=load).volume
+            d["loading"] = {"max": w.loading_max, "volume_mm3": w.loading_volume, "clean": w.loading_clean,
+                            "volume_loss_nominal": {"pass_1": float(1 - v1[0] / v0[0]),
+                                                    "last_pass": float(1 - v1[-1] / v0[-1])}}
+        if w.tilt_stiffness > 0:
+            F = max(forces)
+            tilt = {}
+            for lab, k in (("soft_k_low", pr.k_low), ("mid", nom["k_pad"]), ("stiff_k_high", pr.k_high)):
+                _, a, b = ctx.model.contact.tilt_solution(F, k, w.tilt_stiffness)   # every station of a pass
+                E_t = ctx.model.line_exposures(F, k, tilt_stiffness=w.tilt_stiffness)[0].sum(axis=0)
+                E_r = ctx.model.line_exposures(F, k)[0].sum(axis=0)
+                tilt[lab] = {"max_tilt_deg": float(np.degrees(np.max(np.hypot(a, b)))),
+                             "map_change_rel_rms": float(np.sqrt(np.mean((E_t - E_r) ** 2)) / np.mean(E_r))}
+            d["tilt"] = {"stiffness_Nmm_per_rad": w.tilt_stiffness, "force_N": F, "at_max_force": tilt}
         out[name] = d
     return out
 
@@ -529,6 +565,9 @@ def select_main_draw(ctx: Context) -> int:
     return int(ranked[(n - 1) // 2])
 
 
+STEADY_FROM = 4   # first pass of the 'steady state' comparison (D has three scans for its wear fit)
+
+
 def _final_draw_summary(rows: list[dict]) -> dict:
     last = rows[-1]
     later = [r for r in rows if r["pass"] >= 2]
@@ -541,6 +580,13 @@ def _final_draw_summary(rows: list[dict]) -> dict:
         "final_true_mean_removal_um": last["true_mean_removal_um"],
         # over passes 2..N (pass 1 is a prior prediction for every estimator), geometric mean
         **{f"mean_rmse_{k}_um": _gmean([r[f"rmse_{k}_um"] for r in later]) for k in ("A", "B", "C", "D", "oracle")},
+        # start-up (passes 2-3: D has at most two scans for its wear fit), steady state (passes
+        # STEADY_FROM..N) and the last two passes (one at each force of the alternating schedule)
+        **{f"startup_rmse_{k}_um": _gmean([r[f"rmse_{k}_um"] for r in later if r["pass"] < STEADY_FROM])
+           for k in ("C", "D", "oracle")},
+        **{f"steady_rmse_{k}_um": _gmean([r[f"rmse_{k}_um"] for r in rows if r["pass"] >= STEADY_FROM])
+           for k in ("C", "D", "oracle")},
+        **{f"last_two_rmse_{k}_um": _gmean([r[f"rmse_{k}_um"] for r in rows[-2:]]) for k in ("C", "D", "oracle")},
         "n_passes_C_better_than_B": sum(r["rmse_C_um"] < r["rmse_B_um"] for r in rows),
         "n_passes_C_better_than_D": sum(r["rmse_C_um"] < r["rmse_D_um"] for r in rows),
         "predictive_inside_passes_2_on": int(sum(r["C_pred_mean_inside"] for r in later)),
@@ -587,7 +633,10 @@ def _c_vs_d(finals: list[dict]) -> dict:
     """C against D over draws: error ratios and win fractions with 90% bootstrap intervals."""
     out = {}
     for label, c_key, d_key in (("final", "final_rmse_C_um", "final_rmse_D_um"),
-                                ("mean_over_passes", "mean_rmse_C_um", "mean_rmse_D_um")):
+                                ("mean_over_passes", "mean_rmse_C_um", "mean_rmse_D_um"),
+                                ("startup", "startup_rmse_C_um", "startup_rmse_D_um"),
+                                ("steady", "steady_rmse_C_um", "steady_rmse_D_um"),
+                                ("last_two", "last_two_rmse_C_um", "last_two_rmse_D_um")):
         ratio = np.array([f[d_key] / f[c_key] for f in finals])
         wins = (ratio > 1).astype(float)
         out[label] = {"D_over_C_median": float(np.median(ratio)), "D_over_C_median_ci90": bootstrap_ci(ratio),
@@ -699,12 +748,13 @@ def run_task(ctx: Context, task: tuple) -> dict:
     traj = make_truth(ctx, d, "alternating", world)
     if kind == "tuning":   # every candidate drift on the same hidden-truth trajectory
         import dataclasses
-        for v in task[3]:
+        for i, v in enumerate(task[3]):     # D (independent of the drift) once, for its decision margins
             tctx = dataclasses.replace(ctx, pf=dataclasses.replace(ctx.pf, rate_drift=v))
             out[(kind, world, v)], _ = run_episode(tctx, d, world, "alternating", default, experiment=kind,
-                                                   traj=traj, full=False)
+                                                   traj=traj, full=False, with_D=(i == 0))
         return out
-    out[(kind, world, default)], _ = run_episode(ctx, d, world, "alternating", default, experiment=kind, traj=traj)
+    out[(kind, world, default)], _ = run_episode(ctx, d, world, "alternating", default, experiment=kind, traj=traj,
+                                                 risk=(kind == "robustness"))
     if kind != "robustness":
         return out
     if world == e.get("ablation_world", "matched") and d < int(e.get("ablation_draws", e["robustness_draws"])):
@@ -794,16 +844,21 @@ def experiment_tuning(ctx: Context, out: Path, verbose: bool = True, workers=1) 
         by_value.append({"rate_drift": v, "mean_interval_score": score, "worlds": per_world})
     best = min(by_value, key=lambda x: (x["mean_interval_score"], x["rate_drift"]))
     chosen = best["rate_drift"]
+    first = float(t["rate_drift"][0])
+    d_rows = [r for w in t["worlds"] for r in runs[("tuning", w, first)]]
+    margins = _tune_margins(d_rows, n_passes, ctx.threshold, cost_ratios(ctx))
     summary = {"draws": [int(x) for x in t["draws"]], "first_draw": int(t["draws"][0]),
                "last_draw": int(t["draws"][1]) - 1, "n_draws": int(t["draws"][1]) - int(t["draws"][0]),
                "worlds": list(t["worlds"]), "criterion":
                "mean relative interval score of the 90% predictive interval of next-pass mean removal",
                "by_value": by_value, "chosen_rate_drift": chosen, "chosen_index": by_value.index(best),
-               "chosen": best, "constant_rate": next((v for v in by_value if v["rate_drift"] == 0.0), None)}
+               "chosen": best, "constant_rate": next((v for v in by_value if v["rate_drift"] == 0.0), None),
+               "decision_margins": margins}
     summary["config_hash"] = _tuning_hash(ctx.cfg)
     write_csv(out / "tuning.csv", table)
     write_json(out / "tuning.json", summary)
     set_rate_drift(ctx, chosen)
+    ctx.__dict__["decision_margins"] = margins
     if verbose:
         print(f"\nTuning of the wear-rate drift on held-out draws {t['draws'][0]}-{t['draws'][1] - 1} "
               f"({', '.join(t['worlds'])}):")
@@ -812,6 +867,11 @@ def experiment_tuning(ctx: Context, out: Path, verbose: bool = True, workers=1) 
                               for w, x in v["worlds"].items())
             print(f"  drift {v['rate_drift']:5.3f}: interval score {v['mean_interval_score']:.4f}  {cells}")
         print(f"  chosen rate_drift = {chosen:g}")
+        nan = float("nan")
+        for tag, m in margins.items():
+            print(f"  cost ratio {tag[1:]}: margin D {m['D']:+.2f} (held-out cost {m.get('D_held_out_cost', nan):.2f}, "
+                  f"{m.get('D_held_out_cost_no_margin', nan):.2f} without), R {m['R']:+.2f} "
+                  f"({m.get('R_held_out_cost', nan):.2f}, {m.get('R_held_out_cost_no_margin', nan):.2f})")
     return summary
 
 
@@ -833,6 +893,19 @@ def set_rate_drift(ctx: Context, value: float) -> None:
     ctx.pf = dataclasses.replace(ctx.pf, rate_drift=float(value))
 
 
+def cost_ratios(ctx: Context) -> list[float]:
+    return [float(c) for c in ctx.cfg["abrasive"].get("cost_ratios", [1, 3, 19])]
+
+
+def risk_quantile(ctx: Context) -> float:
+    return float(ctx.cfg["abrasive"].get("risk_quantile", 0.25))
+
+
+def decision_margins(ctx: Context) -> dict:
+    """Safety margins of D and R per cost ratio, tuned on the held-out draws (empty: none)."""
+    return ctx.__dict__.get("decision_margins", {})
+
+
 def tuned_rate_drift(ctx: Context, out: Path, verbose: bool = True, workers=1) -> float:
     """The tuned drift: from ``out``/tuning.json if it was made with this configuration, else tune now."""
     if str(ctx.cfg["filter"].get("rate_drift", "auto")) != "auto":
@@ -842,6 +915,7 @@ def tuned_rate_drift(ctx: Context, out: Path, verbose: bool = True, workers=1) -
         info = json.loads(path.read_text())
         if info.get("config_hash") == _tuning_hash(ctx.cfg):
             set_rate_drift(ctx, info["chosen_rate_drift"])
+            ctx.__dict__["decision_margins"] = info.get("decision_margins", {})
             return float(info["chosen_rate_drift"])
         if verbose:
             print(f"[swt] {path} was made with another configuration: tuning again")
@@ -1130,79 +1204,159 @@ def _crossing_records(rows: list[dict], n_passes: int, fixed: list[int]) -> list
     return recs
 
 
-def _model_free_change(rr: list[dict], threshold: float) -> int | None:
-    """Change pass chosen by the model-free rule R from the scanned mean removals alone."""
+def _model_free_ratios(rr: list[dict]) -> np.ndarray:
+    """Model-free forecast (rule R) of K / K0 at the start of the next pass, after each scan.
+
+    A least-squares fit of log(scanned mean removal per newton) against the cumulative
+    scanned removal (at mid-pass), with a log-force term once two forces were seen,
+    extrapolated to the start of the next pass; NaN after the first scan (no slope yet).
+    """
     m = np.array([r["scan_mean_um"] for r in rr])
     F = np.array([r["force_N"] for r in rr])
     S_start = np.concatenate([[0.0], np.cumsum(m)[:-1]])
     y = np.log(m / F)
-    for n in range(2, len(rr) + 1):            # decision after scan n (1-based)
+    out = np.full(len(rr), np.nan)
+    for n in range(2, len(rr) + 1):            # forecast after scan n (1-based)
         cols = [np.ones(n), S_start[:n] + 0.5 * m[:n]]
         if n >= 3 and np.ptp(F[:n]) > 0:
             cols.append(np.log(F[:n]))
         coef = np.linalg.lstsq(np.column_stack(cols), y[:n], rcond=None)[0]
-        if coef[1] * (S_start[n - 1] + m[n - 1]) < np.log(threshold):    # slope = -lambda
-            return n + 1
+        out[n - 1] = np.exp(coef[1] * (S_start[n - 1] + m[n - 1]))      # slope = -lambda
+    return out
+
+
+def _change_from_ratio(passes, ratio, threshold: float, margin: float) -> int | None:
+    """First change pass of a rule that changes when its forecast K/K0 for the next pass
+    is below threshold * (1 + margin)."""
+    for p, x in zip(passes, ratio):
+        if np.isfinite(x) and x < threshold * (1.0 + margin):
+            return int(p) + 1
     return None
 
 
-def _decision_rules(rows: list[dict], n_passes: int, threshold: float, cost_ratio: float = 3.0) -> dict:
+def _c_quantile_key(q: float, risk_q: float) -> str:
+    """Row column holding the q-quantile of C's crossing distribution."""
+    for key, value in (("cross_C_median", 0.5), ("cross_C_risk", risk_q), ("cross_C_lo", 0.05)):
+        if abs(q - value) < 1e-9:
+            return key
+    raise ValueError(f"no stored quantile {q} of C's crossing distribution")
+
+
+def _change_passes(rr: list[dict], threshold: float, margins: dict, cost_ratios, risk_q: float) -> dict:
+    """Change pass (None: not before the end of the run) of every decision rule on one draw."""
+    passes = [r["pass"] for r in rr]
+    d_ratio = np.array([r.get("D_next_ratio", np.nan) for r in rr], dtype=float)
+    r_ratio = _model_free_ratios(rr)
+    out = {"A": int(rr[0]["cross_A"]),
+           "D": _change_from_ratio(passes, d_ratio, threshold, 0.0),
+           "R": _change_from_ratio(passes, r_ratio, threshold, 0.0)}
+    for c in cost_ratios:
+        key = _c_quantile_key(1.0 / (1.0 + c), risk_q)
+        out[f"C_r{c:g}"] = next((int(r["pass"]) + 1 for r in rr if r[key] <= r["pass"] + 1), None)
+        m = margins.get(f"r{c:g}", {})
+        out[f"D_r{c:g}"] = _change_from_ratio(passes, d_ratio, threshold, m.get("D", 0.0))
+        out[f"R_r{c:g}"] = _change_from_ratio(passes, r_ratio, threshold, m.get("R", 0.0))
+    return out
+
+
+def _cost(err: np.ndarray, ratio: float) -> np.ndarray:
+    """Cost of changing err passes late (err > 0, each pass on worn abrasive costs ``ratio``)
+    or early (err < 0, each pass of abrasive life thrown away costs 1)."""
+    return ratio * np.maximum(err, 0) + np.maximum(-err, 0)
+
+
+def _decision_rules(rows: list[dict], n_passes: int, threshold: float, margins: dict | None = None,
+                    cost_ratios=(1, 3, 19), risk_q: float = 0.25) -> dict:
     """Sequential abrasive-change decisions, scored against the true crossing.
 
     After each scanned pass n a rule decides whether pass n+1 runs on fresh
-    abrasive. C: when its predicted probability that the crossing happens by
-    pass n+1 is at least 50% (median of its crossing distribution <= n+1).
-    D: when its point forecast is <= n+1. A: at its nominal crossing pass,
-    fixed in advance. R (no model, scan means only): a least-squares fit of
-    log(scanned mean removal per newton) against the cumulative scanned
-    removal (at mid-pass), with a log-force term once two forces were seen,
-    extrapolated to the start of pass n+1; R fires when the extrapolated drop
-    from zero removal reaches ``threshold``.
-    The ideal change pass is the true crossing c (first pass whose starting
-    K < threshold * K0). Error = change pass - c (negative: early, abrasive
-    life wasted; positive: late, passes run on worn abrasive). ``cost_late3``
-    is the mean cost when a pass run on worn abrasive costs ``cost_ratio``
-    times a pass of abrasive life thrown away; the cost-aware rules are
-    C_risk (change when P(crossed by the next pass) >= 1 / (1 + cost_ratio),
-    the Bayes decision for that cost ratio) and D_margin (D's forecast with a
-    fixed one-pass safety margin). A rule that has
-    not fired by the end of the run counts as changing at pass n_passes + 1
-    or later; only draws with c <= n_passes + 1 are scored, and changes
-    before pass n_passes + 1 on the other draws are counted as premature.
+    abrasive. The ideal change pass is the true crossing c (first pass whose
+    starting K < threshold * K0). Error = change pass - c (negative: early, abrasive
+    life thrown away; positive: late, passes run on worn abrasive). For a cost
+    ratio r (a late pass costs r times an early one) the cost of a draw is
+    r * late passes + early passes.
+
+    Rules: A (nominal crossing, fixed in advance); D and R (change when the
+    forecast K/K0 of the next pass is below the threshold: D's MAP forecast, R the
+    model-free extrapolation of the scanned means); for every cost ratio r,
+    C_r (change when C's P(crossed by the next pass) >= 1 / (1 + r), the Bayes
+    decision for that cost; no tuning) and D_r, R_r (D and R with a safety
+    margin on the threshold tuned for that r on held-out draws, ``margins``).
+    A rule that has not fired by the end of the run counts as changing at pass
+    n_passes + 1; only draws with c <= n_passes + 1 are scored, and changes before
+    pass n_passes + 1 on the other draws are counted as premature.
     """
+    margins = margins or {}
     last = n_passes + 1
-    out = {}
-    per_rule: dict[str, list[tuple[int, int, bool]]] = {k: [] for k in ("C", "C_risk", "D", "D_margin", "A", "R")}
-    premature = {k: 0 for k in per_rule}
+    per_rule: dict[str, list[tuple[int, int, bool]]] = {}
+    premature: dict[str, int] = {}
     later_draws = 0
     for rr in by_draw(rows).values():
         c = int(rr[0]["cross_true"])
-        change = {"A": int(rr[0]["cross_A"])}
-        for key, fired in (("C", lambda r: r["cross_C_median"] <= r["pass"] + 1),
-                           ("C_risk", lambda r: r["cross_C_risk"] <= r["pass"] + 1),
-                           ("D", lambda r: r["cross_D"] <= r["pass"] + 1),
-                           ("D_margin", lambda r: r["cross_D"] - 1 <= r["pass"] + 1)):
-            change[key] = next((int(r["pass"]) + 1 for r in rr if fired(r)), None)
-        change["R"] = _model_free_change(rr, threshold)
+        change = _change_passes(rr, threshold, margins, cost_ratios, risk_q)
         if c > last:
             later_draws += 1
             for k, v in change.items():
-                premature[k] += int(v is not None and v < last)
+                premature[k] = premature.get(k, 0) + int(v is not None and v < last)
             continue
         for k, v in change.items():
-            per_rule[k].append((c, last if v is None else v, v is None))
+            per_rule.setdefault(k, []).append((c, last if v is None else v, v is None))
+    out: dict = {"rules": {}, "cost_ratios": [float(c) for c in cost_ratios], "by_cost_ratio": {}}
+    errs = {}
     for k, recs in per_rule.items():
-        if not recs:
-            continue
         e = np.array([ch - c for c, ch, _ in recs], dtype=float)
-        out[k] = {"n": int(e.size), "mean_abs_err": float(np.mean(np.abs(e))), "exact": int(np.sum(e == 0)),
-                  "within_1": int(np.sum(np.abs(e) <= 1)), "late": int(np.sum(e > 0)), "early": int(np.sum(e < 0)),
-                  "mean_passes_late": float(np.mean(np.maximum(e, 0))),
-                  "mean_passes_early": float(np.mean(np.maximum(-e, 0))),
-                  "not_fired": int(sum(nf for _, _, nf in recs)),
-                  "premature_on_later_draws": int(premature[k]),
-                  "cost_late3": float(np.mean(cost_ratio * np.maximum(e, 0) + np.maximum(-e, 0)))}
+        errs[k] = e
+        out["rules"][k] = {"n": int(e.size), "mean_abs_err": float(np.mean(np.abs(e))), "exact": int(np.sum(e == 0)),
+                           "within_1": int(np.sum(np.abs(e) <= 1)), "late": int(np.sum(e > 0)),
+                           "early": int(np.sum(e < 0)), "mean_passes_late": float(np.mean(np.maximum(e, 0))),
+                           "mean_passes_early": float(np.mean(np.maximum(-e, 0))),
+                           "not_fired": int(sum(nf for _, _, nf in recs)),
+                           "premature_on_later_draws": int(premature.get(k, 0)),
+                           **{f"cost_r{c:g}": float(np.mean(_cost(e, c))) for c in cost_ratios}}
+    for c in cost_ratios:
+        tag = f"r{c:g}"
+        if f"C_{tag}" not in errs:
+            continue
+        cC = _cost(errs[f"C_{tag}"], c)
+        entry = {"C_threshold_probability": 1.0 / (1.0 + c), "margins": margins.get(tag, {"D": 0.0, "R": 0.0})}
+        for other in (f"D_{tag}", f"R_{tag}", "D", "R"):
+            diff = cC - _cost(errs[other], c)
+            entry[f"C_minus_{other}"] = {"mean": float(np.mean(diff)), "ci90": bootstrap_ci(diff, np.mean)}
+        costs = {k: out["rules"][k][f"cost_{tag}"] for k in out["rules"]}
+        entry["lowest_cost_rule"] = min(costs, key=costs.get)
+        out["by_cost_ratio"][tag] = entry
     out["draws_crossing_after_run"] = later_draws
+    return out
+
+
+def _tune_margins(rows: list[dict], n_passes: int, threshold: float, cost_ratios,
+                  grid=tuple(np.round(np.arange(-0.30, 0.501, 0.01), 2))) -> dict:
+    """Safety margins of rules D and R for each cost ratio, minimising the mean cost on
+    (held-out) draws whose crossing falls inside the run; ties go to the smaller |margin|."""
+    last = n_passes + 1
+    worlds = sorted({r["world"] for r in rows})       # draws are paired across worlds: group by both
+    draws = [rr for w in worlds for rr in by_draw([r for r in rows if r["world"] == w]).values()
+             if int(rr[0]["cross_true"]) <= last]
+    fc = {"D": lambda rr: np.array([r["D_next_ratio"] for r in rr], dtype=float),
+          "R": _model_free_ratios}
+    errs = {}
+    for name, f in fc.items():
+        ratios = [(rr, [r["pass"] for r in rr], f(rr)) for rr in draws]
+        errs[name] = {m: np.array([(_change_from_ratio(p, x, threshold, m) or last) - int(rr[0]["cross_true"])
+                                   for rr, p, x in ratios], dtype=float) for m in grid}
+    out = {}
+    for c in cost_ratios:
+        entry = {"n_draws": len(draws)}
+        if not draws:                    # nothing to tune on: no margin
+            out[f"r{c:g}"] = {**entry, **{k: 0.0 for k in fc}}
+            continue
+        for name in fc:
+            cost = {m: float(np.mean(_cost(e, c))) for m, e in errs[name].items()}
+            best = min(grid, key=lambda m: (round(cost[m], 12), abs(m)))
+            entry[name] = float(best)
+            entry[f"{name}_held_out_cost"] = cost[best]
+            entry[f"{name}_held_out_cost_no_margin"] = cost[0.0]
+        out[f"r{c:g}"] = entry
     return out
 
 
@@ -1277,7 +1431,8 @@ def experiment_abrasive_change(ctx: Context, out: Path, runs: dict, verbose: boo
             "true_crossings_within_experiment": int(sum(c <= n_passes for c in crosses)),
             "by_decision": _crossing_by_decision(recs, labels),
             "by_lead": lead,
-            "decision_rules": _decision_rules(rows, n_passes, ctx.threshold),
+            "decision_rules": _decision_rules(rows, n_passes, ctx.threshold, decision_margins(ctx),
+                                              cost_ratios(ctx), risk_quantile(ctx)),
         }
         all_recs += recs
         all_lead += lead["rows"]
@@ -1288,12 +1443,15 @@ def experiment_abrasive_change(ctx: Context, out: Path, runs: dict, verbose: boo
         for w, s in summary["worlds"].items():
             dr = s["decision_rules"]
             print(f"\nAbrasive-change decision rules, {w} world (change pass - true crossing):")
-            for k in ("C", "D", "A", "R"):
-                if k in dr:
-                    v = dr[k]
-                    print(f"  {k}: n={v['n']} mean |err| {v['mean_abs_err']:.2f}, exact {v['exact']}, within 1 {v['within_1']}, "
-                          f"late {v['late']} (mean {v['mean_passes_late']:.2f} passes), early {v['early']} "
-                          f"(mean {v['mean_passes_early']:.2f}); premature on later draws {v['premature_on_later_draws']}")
+            for k, v in dr["rules"].items():
+                costs = ", ".join(f"r={c:g}: {v[f'cost_r{c:g}']:.2f}" for c in dr["cost_ratios"])
+                print(f"  {k:6s} n={v['n']} mean |err| {v['mean_abs_err']:.2f}, within 1 {v['within_1']}, "
+                      f"late {v['late']}, early {v['early']}; cost {costs}")
+            for tag, e in dr["by_cost_ratio"].items():
+                cd, cr = e[f"C_minus_D_{tag}"], e[f"C_minus_R_{tag}"]
+                print(f"  cost ratio {tag[1:]}: C - tuned D {cd['mean']:+.2f} [{cd['ci90'][0]:+.2f}, {cd['ci90'][1]:+.2f}], "
+                      f"C - tuned R {cr['mean']:+.2f} [{cr['ci90'][0]:+.2f}, {cr['ci90'][1]:+.2f}]; "
+                      f"lowest cost: {e['lowest_cost_rule']}")
             print(f"Abrasive-change prediction, {w} world (|predicted - true| crossing pass):")
             for label, v in s["by_decision"].items():
                 print(f"  {label:26s} n={v['n']:3d}  C median {v['abs_err_C_passes']['median']:.1f} "
@@ -1375,7 +1533,7 @@ def run_all(ctx: Context, out_dir: str | Path = "results", verbose: bool = True,
     tuning = None
     if str(ctx.cfg["filter"].get("rate_drift", "auto")) == "auto":
         if verbose:
-            print(f"\nTuning the wear-rate drift ({len(tuning_tasks(ctx))} held-out episodes)...")
+            print(f"\nTuning the wear-rate drift and the decision margins ({len(tuning_tasks(ctx))} held-out draws)...")
         tuning = experiment_tuning(ctx, out, verbose, workers)
     main = experiment_main(ctx, out, verbose)
     if verbose:

@@ -1,6 +1,6 @@
 """Command-line interface.
 
-    python -m swt run-all [--config configs/default.yaml] [--results results] [--figures figures] [--workers N]
+    python -m swt run-all [--config configs/default.yaml] [--results results] [--figures figures] [--workers N] [--full]
     python -m swt run --config configs/default.yaml
     python -m swt contact-sweep [--config ...]
     python -m swt figures [--results results] [--figures figures]
@@ -16,9 +16,16 @@ from pathlib import Path
 from .config import build_context, load_config
 
 
+# --full: the secondary experiments at the sizes used before they were cut to keep run-all
+# under 10 minutes (about 15 minutes with 4 workers)
+FULL = {"experiments": {"breakdown_draws": 40, "noise_draws": 40, "ablation_draws": 40,
+                        "noise_levels_um": [1.0, 2.0, 5.0, 10.0]},
+        "tuning": {"draws": [200, 220]}}
+
+
 def _ctx(args):
     t = time.time()
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, FULL if getattr(args, "full", False) else None)
     ctx = build_context(cfg)
     print(f"[swt] context built in {time.time() - t:.1f} s "
           f"({ctx.model.contact.n_stations} stations, {ctx.panel.n_pix} grid nodes, "
@@ -86,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--figures", default="figures", help="output directory for PNG figures")
         sp.add_argument("--workers", default="auto",
                         help="worker processes for the multi-draw experiments ('auto' = min(4, CPUs); 1 = serial)")
+        sp.add_argument("--full", action="store_true",
+                        help="larger single-effect, stress, noise, ablation and tuning experiments (slower)")
         sp.set_defaults(func=fn)
     args = p.parse_args(argv)
     return args.func(args)

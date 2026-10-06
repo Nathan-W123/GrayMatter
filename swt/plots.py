@@ -30,9 +30,9 @@ EST = {"A": ("A: nominal", GRAY), "B": ("B: calibrate-once", ORANGE), "D": ("D: 
 WORLD_LABEL = {"matched": "matched world (tracker's own model)", "realistic": "realistic world (unmodelled effects)",
                "realistic_b": "second mismatch world (pre-registered)",
                "realistic_c": "third mismatch world (pre-registered)",
-               "radial_wear": "stress test: ring-wise wear",
+               "radial_wear": "stress test: ring-wise wear", "edge_tilt": "stress test: tilting pad holder", "loading": "stress test: abrasive loading",
                "only_pad": "foam pad only", "only_removal": "Preston exponent only", "only_force": "force errors only",
-               "only_wear": "two-stage wear only", "only_scan": "scanner effects only"}
+               "only_wear": "two-stage and two-ring wear only", "only_scan": "scanner effects only"}
 
 
 def _truthy(v) -> bool:
@@ -467,7 +467,7 @@ def fig_mismatch(res: Path, figdir: Path) -> None:
         h2, l2 = cx2.get_legend_handles_labels()
         cx.legend(h1 + h2, l1 + l2, loc="center right", fontsize=9.5, frameon=True, facecolor="white",
                   edgecolor="none", framealpha=0.9)
-    fig.suptitle("What the unmodelled effects cost, and how calibrated C stays", x=0.01, ha="left",
+    fig.suptitle("What the unmodelled effects cost, and how well C's mean-removal intervals are calibrated", x=0.01, ha="left",
                  fontsize=15, fontweight="bold")
     fig.tight_layout()
     _save(fig, figdir / "fig7_mismatch_and_calibration.png")

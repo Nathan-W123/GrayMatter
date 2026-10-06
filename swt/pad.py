@@ -140,6 +140,9 @@ class ContactGeometry:
             area_l.append(ai[order])
             r_l.append(ri[order])
             cnt.append(gi.size)
+        self._centres = np.array([[panel.X[panel.node_index(x0, y0)], panel.Y[panel.node_index(x0, y0)],
+                                   panel.Z[panel.node_index(x0, y0)]] for x0, y0 in self.stations])
+        self._normals = np.array([panel.normals[panel.node_index(x0, y0)] for x0, y0 in self.stations])
         self.counts = np.asarray(cnt, dtype=np.int64)
         self.ptr = np.concatenate([[0], np.cumsum(self.counts)])
         self.idx = np.concatenate(idx_l)
@@ -223,6 +226,86 @@ class ContactGeometry:
         delta = d[st] - g
         keep = delta > 0
         return pts[keep], law.pressure(k_pad, delta[keep])
+
+    @property
+    def plane_coords(self) -> tuple[np.ndarray, np.ndarray]:
+        """In-plane coordinates (u along x, v across) of every footprint point relative to its
+        station's pad centre [mm], computed on first use."""
+        if "_uv" not in self.__dict__:
+            st = self.station_of_point
+            P = np.stack([self.panel.X.ravel()[self.idx], self.panel.Y.ravel()[self.idx],
+                          self.panel.Z.ravel()[self.idx]], axis=-1) - self._centres[st]
+            nc = self._normals[st]
+            P -= (P * nc).sum(axis=1, keepdims=True) * nc
+            e1 = np.array([1.0, 0.0, 0.0]) - self._normals[:, :1] * self._normals    # x projected onto each plane
+            e1 /= np.linalg.norm(e1, axis=1, keepdims=True)
+            e2 = np.cross(self._normals, e1)
+            self.__dict__["_uv"] = ((P * e1[st]).sum(axis=1), (P * e2[st]).sum(axis=1))
+        return self.__dict__["_uv"]
+
+    def tilt_solution(self, force: float, k_pad: float, tilt_stiffness: float,
+                      tol: float = 1e-9, max_iter: int = 60) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Penetration d and tilts (a, b) [rad] of a linear Winkler pad on a holder that can tilt
+        with rotational stiffness ``tilt_stiffness`` [N mm / rad] about the pad centre.
+
+        The pad face is the plane w = d + a u + b v (penetration at in-plane point (u, v)).
+        Equilibrium minimises the convex energy
+            sum_i A_i k/2 max(0, w_i - gap_i)^2 - F d + tilt_stiffness/2 (a^2 + b^2),
+        i.e. force balance sum A p = F and moment balance sum A p (u, v) = -tilt_stiffness (a, b).
+        Solved for all stations at once by damped Newton (backtracking on the energy), started
+        from the rigid solution. A very large stiffness gives the rigid holder (a = b = 0).
+        """
+        u, v = self.plane_coords
+        st, seg, A, g = self.station_of_point, self.ptr[:-1], self.area, self.gap
+        d = self.penetration(force / k_pad)
+        x = np.stack([d, np.zeros_like(d), np.zeros_like(d)], axis=1)     # (stations, 3)
+        kt = float(tilt_stiffness)
+
+        def state(x):
+            w = x[st, 0] + x[st, 1] * u + x[st, 2] * v - g
+            np.maximum(w, 0.0, out=w)
+            energy = 0.5 * k_pad * np.add.reduceat(A * w * w, seg) - force * x[:, 0] \
+                + 0.5 * kt * (x[:, 1] ** 2 + x[:, 2] ** 2)
+            return w, energy
+
+        w, energy = state(x)
+        for _ in range(max_iter):
+            Ap = k_pad * A * w
+            r = np.stack([np.add.reduceat(Ap, seg) - force, np.add.reduceat(Ap * u, seg) + kt * x[:, 1],
+                          np.add.reduceat(Ap * v, seg) + kt * x[:, 2]], axis=1)
+            if np.max(np.abs(r[:, 0])) < tol * force and np.max(np.abs(r[:, 1:])) < tol * force * self.pad_radius:
+                break
+            Aa = k_pad * A * (w > 0)
+            Au, Av = Aa * u, Aa * v
+            J = np.empty((d.size, 3, 3))
+            J[:, 0, 0] = np.add.reduceat(Aa, seg)
+            J[:, 0, 1] = J[:, 1, 0] = np.add.reduceat(Au, seg)
+            J[:, 0, 2] = J[:, 2, 0] = np.add.reduceat(Av, seg)
+            J[:, 1, 1] = np.add.reduceat(Au * u, seg) + kt
+            J[:, 1, 2] = J[:, 2, 1] = np.add.reduceat(Au * v, seg)
+            J[:, 2, 2] = np.add.reduceat(Av * v, seg) + kt
+            step = np.linalg.solve(J, -r[..., None])[..., 0]
+            t = np.ones(d.size)
+            for _ in range(30):                     # backtracking: never increase the energy
+                x_new = x + t[:, None] * step
+                w_new, e_new = state(x_new)
+                bad = e_new > energy + 1e-12 * np.abs(energy)
+                if not bad.any():
+                    break
+                t[bad] *= 0.5
+            x, w, energy = x_new, w_new, e_new
+        return x[:, 0], x[:, 1], x[:, 2]
+
+    def tilted_contact_points(self, force: float, k_pad: float, tilt_stiffness: float) -> tuple[np.ndarray, np.ndarray]:
+        """Like :meth:`contact_points` (linear pad) for a holder with finite tilt stiffness."""
+        if force <= 0:
+            return np.zeros(0, dtype=np.int64), np.zeros(0)
+        d, a, b = self.tilt_solution(force, k_pad, tilt_stiffness)
+        u, v = self.plane_coords
+        st = self.station_of_point
+        w = d[st] + a[st] * u + b[st] * v - self.gap
+        pts = np.flatnonzero(w > 0)
+        return pts, k_pad * w[pts]
 
     def pressure(self, force: float, k_pad: float, law: PadLaw = LINEAR) -> np.ndarray:
         """Pad pressure at every footprint point of every station [MPa]."""

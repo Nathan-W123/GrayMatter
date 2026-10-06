@@ -5,7 +5,8 @@ B. :class:`CalibrateOnce`  – least-squares fit of (k_pad, K) to the first scan
 C. :class:`ParticleFilter` – joint Bayesian tracker of log k_pad and the log K and log lambda paths.
 D. :class:`RefitEachPass`  – joint least squares over all scans: one pooled k_pad, a K per
                              scan, wear rate and force exponent from a log-linear fit of those
-                             K (the point-estimate counterpart of C, without uncertainty).
+                             K with C's priors (the point-estimate counterpart of C, without
+                             uncertainty).
 
 All three see the same information: the commanded action of every pass and
 the noisy post-pass scans. None of them sees the hidden parameters. All
@@ -165,9 +166,11 @@ class RefitEachPass:
        least-squares errors, each with its own K profiled out, minimised over
        log k_pad), and each scan's K_i (at the start of its pass) is refitted at
        that stiffness;
-    3. the wear rate (and, once two forces were scanned, the force exponent
-       through a log-force term) comes from a least-squares fit of log K_i
-       against the cumulative removed volume at the start of each pass;
+    3. the wear rate and the force exponent come from a fit of log K_i against
+       the cumulative removed volume at the start of each pass and log F_i,
+       penalised by C's priors (a MAP estimate: log-normal prior on lambda,
+       linearised at its median; N(1, sd^2) on beta; log K_i noise ``obs_sd``),
+       so that one or two scans do not give a wild wear rate;
     4. steps 2-3 are repeated twice so the within-pass wear in the fits uses the
        fitted rate.
 
@@ -178,11 +181,15 @@ class RefitEachPass:
 
     name = "D: joint least squares"
 
-    def __init__(self, priors: Priors, table: ExposureTable, outlier_z: float = 5.0, force_ref: float = 30.0):
+    def __init__(self, priors: Priors, table: ExposureTable, outlier_z: float = 5.0, force_ref: float = 30.0,
+                 force_exponent_sd: float = 0.15, obs_sd: float = 0.02):
         self.table = table
         self.k_bounds = (priors.k_low, priors.k_high)
         nom = priors.log_mean()
         self.lam_prior = nom["lam"]
+        self.lam_sd = priors.lam_sigma_log * nom["lam"]     # log-normal prior, linearised at its median
+        self.gamma_sd = force_exponent_sd
+        self.obs_sd = obs_sd
         self.k_pad, self.K, self.lam = nom["k_pad"], nom["K0"], nom["lam"]
         self.outlier_z = outlier_z
         self.force_ref = force_ref
@@ -243,21 +250,20 @@ class RefitEachPass:
                    for (st, act), zi in zip(self.stats, z)]
 
     def _fit_wear(self) -> None:
-        """Wear rate (and force exponent) from log K_i against cumulative volume."""
-        if len(self.Ks) < 2:
-            self.lam, self.gamma = self.lam_prior, 0.0
-            return
+        """Wear rate and force exponent: MAP fit of log K_i = c - lam W_i + (beta - 1) log(F_i / F_ref)
+        with flat c and C's priors on lam and beta (one scan gives the prior medians)."""
         W, Ws = 0.0, []
         for K, (_, act) in zip(self.Ks, self.stats):
             Ws.append(W)
             W += self._volume(K, act)
         logF = np.array([np.log(act.force / self.force_ref) for _, act in self.stats])
-        cols = [np.ones(len(Ws)), np.array(Ws)]
-        if len(Ws) >= 3 and np.ptp(logF) > 0:
-            cols.append(logF)
-        coef = np.linalg.lstsq(np.column_stack(cols), np.log(self.Ks), rcond=None)[0]
-        self.lam = float(max(-coef[1], 0.0))
-        self.gamma = float(coef[2]) if len(coef) > 2 else 0.0
+        X = np.column_stack([np.ones(len(Ws)), -np.array(Ws), logF]) / self.obs_sd
+        y = np.log(self.Ks) / self.obs_sd
+        P = np.array([[0.0, 1.0 / self.lam_sd, 0.0], [0.0, 0.0, 1.0 / self.gamma_sd]])
+        yp = np.array([self.lam_prior / self.lam_sd, 0.0])
+        coef = np.linalg.lstsq(np.vstack([X, P]), np.concatenate([y, yp]), rcond=None)[0]
+        self.lam = float(max(coef[1], 0.0))
+        self.gamma = float(np.clip(coef[2], -0.5, 0.5))
 
     def update(self, scan: np.ndarray, action: PassAction) -> None:
         finite = np.isfinite(scan)
@@ -280,6 +286,12 @@ class RefitEachPass:
     def K0(self) -> float:
         """Fresh effectiveness at F_ref: the first scan's K."""
         return float(self.Ks[0] / self._f(self.stats[0][1])) if self.Ks else self.K
+
+    def next_ratio(self) -> float:
+        """Forecast K / K0 at the start of the next pass (both at F_ref)."""
+        if not self.stats:
+            return 1.0
+        return float(self._K_next() / self._f(self.last_action) / self.K0())
 
     def crossing_pass(self, passes_done: int, schedule: list[PassAction], threshold: float,
                       horizon: int = 400) -> int:

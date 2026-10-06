@@ -117,6 +117,8 @@ def build_context(cfg: dict) -> Context:
                   profile_offsets=bool(f.get("profile_offsets", True)))
     worlds = build_worlds(cfg.get("worlds", {}))
     ctx = Context(cfg, panel, path, sander, model, priors, table, obs_index, obs_shape, pf, worlds)
+    if any(w.tilt_stiffness > 0 for w, _ in worlds.values()):
+        model.contact.plane_coords        # computed once here, shared by forked workers
     ctx.build_seconds = time.time() - t0
     return ctx
 
@@ -137,7 +139,9 @@ def make_world(name: str, spec: dict) -> tuple[World, ScanArtefacts]:
     f = spec.get("force", {})
     world = World(name, law, float(f.get("gain_sigma_log", 0.0)), float(f.get("ripple", 0.0)),
                   float(f.get("ripple_corr", 0.5)), wear, int(w.get("rings", 1)),
-                  float(spec.get("removal", {}).get("preston_exponent", 1.0)))
+                  float(spec.get("removal", {}).get("preston_exponent", 1.0)),
+                  float(w.get("loading_max", 0.0)), float(w.get("loading_volume_mm3", 50.0)),
+                  float(w.get("loading_clean", 0.5)), float(pad.get("tilt_stiffness_Nmm_per_rad", 0.0)))
     return world, ScanArtefacts(**spec.get("scan", {}))
 
 

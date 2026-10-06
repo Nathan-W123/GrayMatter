@@ -218,3 +218,17 @@ def test_radial_wear_dulls_the_pad_centre_of_a_stiff_pad(small_ctx):
     assert np.allclose(one.removal, uni.removal, rtol=1e-12)
     assert rings.K[-1] < uni.K[-1]
     assert np.allclose(rings.volume, [small_ctx.model.volume(r) for r in rings.removal], rtol=1e-9)
+
+
+def test_abrasive_loading_reduces_cutting_and_is_shed_between_passes(small_ctx):
+    """Loading lowers every pass's removal by less than its maximum and leaves the reported
+    (wear) K of the first pass unchanged; less removal also means slower wear."""
+    sched = small_ctx.schedule()
+    truth = HiddenTruth(0.05, 6e-5, 2.5e-4)
+    base = simulate_truth(small_ctx.model, truth, sched, 0.0, np.random.default_rng(0), max_extend=0)
+    load = simulate_truth(small_ctx.model, truth, sched, 0.0, np.random.default_rng(0), max_extend=0,
+                          world=World("l", loading_max=0.15, loading_volume=50.0, loading_clean=0.5))
+    loss = 1 - load.volume / base.volume
+    assert np.all(loss > 0.01) and np.all(loss < 0.15)
+    np.testing.assert_allclose(load.K[0], base.K[0])
+    assert np.all(load.K[1:] > base.K[1:])

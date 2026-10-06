@@ -35,9 +35,15 @@ def test_run_all_and_figures(tmp_path, capsys):
     main = on_disk["main_run"]["worlds"][on_disk["main_run"]["world"]]
     assert {"mean", "median", "lo", "hi"} <= set(main["C_final"]["k_pad"])
     assert set(on_disk["world_breakdown"]["worlds"]) == {"matched", "only_pad", "only_removal", "only_force",
-                                                         "only_wear", "only_scan", "realistic", "radial_wear"}
+                                                         "only_wear", "only_scan", "realistic", "radial_wear",
+                                                         "edge_tilt", "loading"}
     assert on_disk["robustness"]["worlds"]["realistic_b"]["n_draws"] == 2
     assert on_disk["robustness"]["worlds"]["realistic_c"]["n_draws"] == 2
-    assert {"C", "C_risk", "D", "D_margin", "A", "R"} <= set(on_disk["abrasive_change"]["worlds"]["realistic"]["decision_rules"])
+    rules = on_disk["abrasive_change"]["worlds"]["realistic"]["decision_rules"]
+    assert {"A", "D", "R", "C_r1", "C_r3", "C_r19", "D_r3", "R_r19"} <= set(rules["rules"])
+    assert set(rules["by_cost_ratio"]) == {"r1", "r3", "r19"} == set(on_disk["tuning"]["decision_margins"])
+    assert {"startup", "steady", "last_two"} <= set(on_disk["robustness"]["worlds"]["realistic"]["C_vs_D"])
+    assert "tilt" in on_disk["model_info"]["worlds"]["edge_tilt"]
+    assert "loading" in on_disk["model_info"]["worlds"]["loading"]
     assert (res / "abrasive_change_by_lead.csv").exists()
     assert "Robustness, realistic world, 3 hidden truths" in capsys.readouterr().out
