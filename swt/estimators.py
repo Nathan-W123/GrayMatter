@@ -3,9 +3,9 @@
 A. :class:`Nominal`        – prior-mean parameters, open loop, never updated.
 B. :class:`CalibrateOnce`  – least-squares fit of (k_pad, K) to the first scan, then frozen.
 C. :class:`ParticleFilter` – joint Bayesian tracker of log k_pad and the log K and log lambda paths.
-D. :class:`RefitEachPass`  – least-squares (k_pad, K) from every scan, wear rate from a
-                             log-linear fit of those K against removed volume (an engineering
-                             baseline without a probabilistic model).
+D. :class:`RefitEachPass`  – joint least squares over all scans: one pooled k_pad, a K per
+                             scan, wear rate and force exponent from a log-linear fit of those
+                             K (the point-estimate counterpart of C, without uncertainty).
 
 All three see the same information: the commanded action of every pass and
 the noisy post-pass scans. None of them sees the hidden parameters. All
@@ -153,23 +153,30 @@ class CalibrateOnce(_ExactPredictor):
 
 
 class RefitEachPass:
-    """Refit (k_pad, K) to every scan by least squares; extrapolate K with a fitted wear rate.
+    """Joint least-squares tracker: the point-estimate counterpart of C.
 
-    The same model structure as C (linear pad, exponential wear acting during the
-    pass, outlier rejection) without the probabilistic pooling: after each scan,
-    (k_i, K_i) is the least-squares fit of that scan alone (K_i = effectiveness at
-    the start of the pass, within-pass wear at the current wear-rate estimate),
-    after rejecting points more than ``outlier_z`` robust s.d. from a first fit.
-    The wear rate is the slope of a least-squares fit of log K_i against the
-    cumulative removed volume at the start of each pass (the prior median until
-    two scans exist); once two different forces have been scanned the fit also
-    has a log-force term, so that, like C, D learns a force dependence other
-    than Preston's (K_i ~ K (F_i / F_ref)^(beta - 1)). Predictions use the latest
-    k and K, extrapolated through the pass just scanned and rescaled to the next
-    force. Point predictions only.
+    Same model structure as C (linear pad, exponential wear acting during the
+    pass, force exponent, outlier rejection), without the probabilistic
+    treatment. After every scan:
+
+    1. points more than ``outlier_z`` robust s.d. from a fit of that scan alone
+       are rejected;
+    2. one stiffness is fitted to *all* scans so far (sum of the per-scan
+       least-squares errors, each with its own K profiled out, minimised over
+       log k_pad), and each scan's K_i (at the start of its pass) is refitted at
+       that stiffness;
+    3. the wear rate (and, once two forces were scanned, the force exponent
+       through a log-force term) comes from a least-squares fit of log K_i
+       against the cumulative removed volume at the start of each pass;
+    4. steps 2-3 are repeated twice so the within-pass wear in the fits uses the
+       fitted rate.
+
+    Predictions use the pooled k and the latest K, extrapolated through the
+    pass just scanned and rescaled to the next force. K0 for the abrasive
+    change is the first scan's K. Point predictions only.
     """
 
-    name = "D: refit each pass"
+    name = "D: joint least squares"
 
     def __init__(self, priors: Priors, table: ExposureTable, outlier_z: float = 5.0, force_ref: float = 30.0):
         self.table = table
@@ -180,77 +187,105 @@ class RefitEachPass:
         self.outlier_z = outlier_z
         self.force_ref = force_ref
         self.gamma = 0.0                   # beta - 1
-        self.logF: list[float] = []
         self.rpm_ref = table.model.sander.spindle_rpm
-        self.W_start: list[float] = []     # cumulative removed volume at the start of each scanned pass
-        self.logK: list[float] = []        # fitted log K at the start of each scanned pass
-        self.W = 0.0
-        self.last_action: PassAction | None = None
+        self.stats: list = []              # per scan: (ScanStats, action)
+        self.Ks: list[float] = []          # fitted K at the start of each scanned pass (effective, at its force)
+        self.lk_grid = np.linspace(np.log(self.k_bounds[0]), np.log(self.k_bounds[1]), 2001)
 
-    def _volume(self, K: float, action: PassAction) -> float:
-        """Volume removed by a pass that starts at effectiveness K (wear during the pass)."""
-        U = action.force * action.rpm / self.rpm_ref * float(self.table.volume(np.array([action.force / self.k_pad]))[0])
-        return float(np.log1p(self.lam * K * U) / self.lam) if self.lam > 0 else K * U
+    @property
+    def last_action(self) -> PassAction | None:
+        return self.stats[-1][1] if self.stats else None
+
+    def _s(self, action: PassAction) -> float:
+        return action.rpm / self.rpm_ref
 
     def _f(self, action: PassAction) -> float:
         """Force factor (F / F_ref)^(beta - 1) of the effective K."""
         return float((action.force / self.force_ref) ** self.gamma)
 
+    def _volume(self, K: float, action: PassAction, k_pad: float | None = None) -> float:
+        """Volume removed by a pass that starts at effective K (wear during the pass)."""
+        k = self.k_pad if k_pad is None else k_pad
+        U = action.force * self._s(action) * float(self.table.volume(np.array([action.force / k]))[0])
+        return float(np.log1p(self.lam * K * U) / self.lam) if self.lam > 0 else K * U
+
     def _K_next(self, action: PassAction | None = None) -> float:
         """Effective K at the start of the next pass (at that pass's force if given)."""
-        if self.last_action is None:
+        if not self.stats:
             return self.K
-        K = self.K * np.exp(-self.lam * self._volume(self.K, self.last_action))
-        return float(K if action is None else K / self._f(self.last_action) * self._f(action))
+        last = self.last_action
+        K = self.K * np.exp(-self.lam * self._volume(self.K, last))
+        return float(K if action is None else K / self._f(last) * self._f(action))
 
     def predict(self, action: PassAction) -> np.ndarray:
-        a = self._K_next(action) * action.force * action.rpm / self.rpm_ref
+        a = self._K_next(action) * action.force * self._s(action)
         return self.table.map_obs(action.force / self.k_pad, a, self.lam * a)
 
+    def _fit_k(self) -> None:
+        """Pooled stiffness and per-scan K for the current wear rate."""
+        tab, lk = self.table, self.lk_grid
+        z = [self.lam * K * act.force * self._s(act) for K, (_, act) in zip(self.Ks, self.stats)]
+
+        def total(lks):
+            return sum(tab.profile_sse(act.force / np.exp(lks), st, zi)[1] for (st, act), zi in zip(self.stats, z))
+
+        sse = total(lk)
+        i = int(np.argmin(sse))
+        lo, hi = lk[max(i - 1, 0)], lk[min(i + 1, lk.size - 1)]
+        best = lk[i]
+        if hi > lo:
+            res = minimize_scalar(lambda x: float(total(np.array([x]))[0]), bounds=(lo, hi), method="bounded",
+                                  options={"xatol": 1e-8})
+            if res.fun <= sse[i]:
+                best = res.x
+        self.k_pad = float(np.exp(best))
+        self.Ks = [float(tab.profile_sse(np.array([act.force / self.k_pad]), st, zi)[0][0] / (act.force * self._s(act)))
+                   for (st, act), zi in zip(self.stats, z)]
+
+    def _fit_wear(self) -> None:
+        """Wear rate (and force exponent) from log K_i against cumulative volume."""
+        if len(self.Ks) < 2:
+            self.lam, self.gamma = self.lam_prior, 0.0
+            return
+        W, Ws = 0.0, []
+        for K, (_, act) in zip(self.Ks, self.stats):
+            Ws.append(W)
+            W += self._volume(K, act)
+        logF = np.array([np.log(act.force / self.force_ref) for _, act in self.stats])
+        cols = [np.ones(len(Ws)), np.array(Ws)]
+        if len(Ws) >= 3 and np.ptp(logF) > 0:
+            cols.append(logF)
+        coef = np.linalg.lstsq(np.column_stack(cols), np.log(self.Ks), rcond=None)[0]
+        self.lam = float(max(-coef[1], 0.0))
+        self.gamma = float(coef[2]) if len(coef) > 2 else 0.0
+
     def update(self, scan: np.ndarray, action: PassAction) -> None:
-        if self.last_action is not None:      # K at the start of this pass, before refitting
-            self.W += self._volume(self.K, self.last_action)
         finite = np.isfinite(scan)
-        k, K = least_squares_fit(self.table, scan, action, self.k_bounds, self.lam, finite)
-        a = K * action.force * action.rpm / self.rpm_ref
-        r = scan - self.table.map_obs(action.force / k, a, self.lam * a)
+        k1, K1 = least_squares_fit(self.table, scan, action, self.k_bounds, self.lam, finite)
+        a1 = K1 * action.force * self._s(action)
+        r = scan - self.table.map_obs(action.force / k1, a1, self.lam * a1)
         med = np.nanmedian(r)
         mad = 1.4826 * np.nanmedian(np.abs(r - med))
         valid = finite & (np.abs(r - med) <= self.outlier_z * mad)
-        if (valid != finite).any():
-            k, K = least_squares_fit(self.table, scan, action, self.k_bounds, self.lam, valid)
-        self.k_pad, self.K = k, K
-        self.W_start.append(self.W)
-        self.logK.append(float(np.log(K)))
-        self.logF.append(float(np.log(action.force / self.force_ref)))
-        if len(self.logK) >= 2:
-            coef = self._fit()
-            self.lam = float(max(-coef[1], 0.0))
-            self.gamma = float(coef[2]) if len(coef) > 2 else 0.0
-        self.last_action = action
-
-    def _fit(self) -> np.ndarray:
-        """Least squares log K_i = c - lambda W_i (+ gamma log(F_i / F_ref) once two forces were seen)."""
-        cols = [np.ones(len(self.logK)), np.array(self.W_start)]
-        if len(self.logK) >= 3 and np.ptp(self.logF) > 0:
-            cols.append(np.array(self.logF))
-        A = np.column_stack(cols)
-        return np.linalg.lstsq(A, np.array(self.logK), rcond=None)[0]
+        self.stats.append((self.table.scan_stats(scan, valid), action))
+        self.Ks.append(K1)
+        for _ in range(2):
+            self._fit_k()
+            self._fit_wear()
+        self.K = self.Ks[-1]
 
     def advance(self, action: PassAction) -> None:
         pass   # the extrapolation happens in predict()
 
     def K0(self) -> float:
-        """Intercept of the wear fit (K at zero removed volume, at F_ref)."""
-        if len(self.logK) >= 2:
-            return float(np.exp(self._fit()[0]))
-        return float(np.exp(self.logK[0])) if self.logK else self.K
+        """Fresh effectiveness at F_ref: the first scan's K."""
+        return float(self.Ks[0] / self._f(self.stats[0][1])) if self.Ks else self.K
 
     def crossing_pass(self, passes_done: int, schedule: list[PassAction], threshold: float,
                       horizon: int = 400) -> int:
         """Point prediction of the first pass whose starting K < threshold * K0."""
         thr = threshold * self.K0()
-        if self.last_action is None:
+        if not self.stats:
             return passes_done + 1
         K = self._K_next() / self._f(self.last_action)          # at F_ref
         for i in range(horizon):

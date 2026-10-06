@@ -25,10 +25,11 @@ SURFACE = "#ffffff"
 BLUE_RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 SEQ = LinearSegmentedColormap.from_list("swt_blue", ["#f4f8fd"] + BLUE_RAMP)
 
-EST = {"A": ("A: nominal", GRAY), "B": ("B: calibrate-once", ORANGE), "D": ("D: refit each pass", GREEN),
+EST = {"A": ("A: nominal", GRAY), "B": ("B: calibrate-once", ORANGE), "D": ("D: joint least squares", GREEN),
        "C": ("C: joint tracker", BLUE)}
 WORLD_LABEL = {"matched": "matched world (tracker's own model)", "realistic": "realistic world (unmodelled effects)",
                "realistic_b": "second mismatch world (pre-registered)",
+               "realistic_c": "third mismatch world (pre-registered)",
                "radial_wear": "stress test: ring-wise wear",
                "only_pad": "foam pad only", "only_removal": "Preston exponent only", "only_force": "force errors only",
                "only_wear": "two-stage wear only", "only_scan": "scanner effects only"}
@@ -209,8 +210,8 @@ def fig_maps(res: Path, figdir: Path) -> None:
 def fig_rmse(res: Path, figdir: Path) -> None:
     rob = _read_csv(res / "robustness_per_pass.csv")
     rsum = json.loads((res / "robustness_summary.json").read_text())
-    worlds = [w for w in ("matched", "realistic", "realistic_b") if w in rsum["worlds"]]
-    fig, axes = plt.subplots(1, len(worlds), figsize=(5.6 * len(worlds), 4.9), sharey=True, squeeze=False)
+    worlds = [w for w in ("matched", "realistic", "realistic_b", "realistic_c") if w in rsum["worlds"]]
+    fig, axes = plt.subplots(1, len(worlds), figsize=(4.9 * len(worlds), 4.9), sharey=True, squeeze=False)
     for ax, w in zip(axes[0], worlds):
         rows = [r for r in rob if r["world"] == w]
         passes = sorted({int(r["pass"]) for r in rows})
@@ -268,7 +269,7 @@ def fig_params(res: Path, figdir: Path) -> None:
             ax.plot(passes, s * med, color=BLUE, lw=2.2, label="C: posterior median")
             ax.plot(passes, s * true, color=INK, lw=1.4, marker="o", ms=3.5, label="true value")
             dv = s * np.array([r[dkey] for r in rows])
-            ax.plot(passes, dv, color=GREEN, lw=1.6, ls="--", label="D: latest refit")
+            ax.plot(passes, dv, color=GREEN, lw=1.6, ls="--", label="D: least-squares estimate")
             if name == "k_pad":
                 vals = np.concatenate([true, med[1:], dv[1:] / s])
                 ax.set_ylim(s * vals.min() * 0.97, s * vals.max() * 1.03)
@@ -312,7 +313,7 @@ def fig_change(res: Path, figdir: Path) -> None:
     ax.text(true_cross - 0.4, 0.6, "after the\ncrossing", color=INK2, fontsize=11, va="bottom")
     ax.errorbar(p, med, yerr=[med - lo, hi - med], color=BLUE, marker="o", ms=7, lw=2.2, capsize=5,
                 label="C: predicted crossing (median, ≥90% band)")
-    ax.plot(p + 0.15, [r["cross_D"] for r in rr], "s", color=GREEN, ms=6, label="D: refit + fitted wear rate")
+    ax.plot(p + 0.15, [r["cross_D"] for r in rr], "s", color=GREEN, ms=6, label="D: least-squares forecast")
     ax.axhline(true_cross, color=INK, lw=1.6, label=f"true crossing (pass {true_cross})")
     ax.axhline(cross_A, color=GRAY, lw=2.0, ls="--", label=f"A: nominal model (pass {cross_A:g})")
     ax.set_xlabel("prediction made after pass")
@@ -430,7 +431,8 @@ def fig_mismatch(res: Path, figdir: Path) -> None:
     ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.07), ncol=4, fontsize=10)
     ax.grid(axis="y", visible=False)
     bx = axes[1]
-    for w, c, ls in (("matched", INK2, "-"), ("realistic", BLUE, "-"), ("realistic_b", BLUE, "--")):
+    for w, c, ls in (("matched", INK2, "-"), ("realistic", BLUE, "-"), ("realistic_b", BLUE, "--"),
+                     ("realistic_c", BLUE, ":")):
         if w not in rsum["worlds"]:
             continue
         pp = rsum["worlds"][w]["predictive_90"]["per_pass_fraction"]

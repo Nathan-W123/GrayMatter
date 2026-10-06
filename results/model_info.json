@@ -287,6 +287,95 @@
         }
       }
     },
+    "realistic_c": {
+      "pad_law": "foam",
+      "force_gain_sigma_log": 0.03,
+      "force_ripple": 0.04,
+      "ripple_corr": 0.3,
+      "wear_law": "two_stage",
+      "wear_rings": 2,
+      "preston_exponent": 0.85,
+      "scan_artefacts": {
+        "registration_sigma_mm": 0.2,
+        "profile_bias_um": 0.3,
+        "outlier_fraction": 0.01,
+        "outlier_um": 10.0,
+        "dropout_fraction": 0.03,
+        "dropout_gap_points": 6,
+        "texture_um": 0.8,
+        "texture_corr_mm": 1.0
+      },
+      "foam": {
+        "thickness_mm": 20.0,
+        "at_max_force": {
+          "soft_k_low": {
+            "k_pad": 0.00063,
+            "force_N": 40.0,
+            "max_strain_foam": 0.2792985686582025,
+            "peak_pressure_ratio_foam_over_linear": 1.1385248796776013,
+            "contact_fraction_linear": 1.0,
+            "contact_fraction_foam": 0.9731292240045599
+          },
+          "mid": {
+            "k_pad": 0.05612486080160912,
+            "force_N": 40.0,
+            "max_strain_foam": 0.015527456039158092,
+            "peak_pressure_ratio_foam_over_linear": 1.007185943574378,
+            "contact_fraction_linear": 0.2728605162446055,
+            "contact_fraction_foam": 0.2728605162446055
+          },
+          "stiff_k_high": {
+            "k_pad": 5.0,
+            "force_N": 40.0,
+            "max_strain_foam": 0.0007901904232119344,
+            "peak_pressure_ratio_foam_over_linear": 1.0004208133392583,
+            "contact_fraction_linear": 0.07124826968487909,
+            "contact_fraction_foam": 0.07124826968487909
+          }
+        }
+      },
+      "two_stage": {
+        "fast_fraction": 0.15,
+        "fast_ratio": 8.0,
+        "volume_to_half_K0_mm3": {
+          "single": 2772.588722239782,
+          "two_stage": 2139.185965184226
+        },
+        "nominal_first_pass_volume_mm3": 243.7455126727809,
+        "K_over_K0_after_first_pass": {
+          "single": 0.940883098578072,
+          "two_stage": 0.8918754420095307
+        }
+      },
+      "preston": {
+        "exponent": 0.85,
+        "p_ref_kPa": 10.0,
+        "force_N": 30.0,
+        "volume_ratio_vs_linear": {
+          "soft_k_low": 1.1478931273752193,
+          "mid": 0.954953763913075,
+          "stiff_k_high": 0.7619798358347663
+        },
+        "soft_over_stiff_volume_ratio": 1.5064612912199655
+      },
+      "radial_wear": {
+        "rings": 2,
+        "K_over_K0_at_last_pass_nominal": {
+          "soft_k_low": {
+            "rings": 0.33791871215354286,
+            "uniform": 0.33994389467020353
+          },
+          "mid": {
+            "rings": 0.3172979348522787,
+            "uniform": 0.3431436073041006
+          },
+          "stiff_k_high": {
+            "rings": 0.3149963585086328,
+            "uniform": 0.34336911457828906
+          }
+        }
+      }
+    },
     "only_pad": {
       "pad_law": "foam",
       "force_gain_sigma_log": 0.0,

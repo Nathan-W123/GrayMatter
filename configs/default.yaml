@@ -48,6 +48,8 @@ priors:
 
 abrasive:
   threshold_fraction: 0.5         # change abrasive when K < 0.5 * K0
+  risk_quantile: 0.25             # cost-aware change rule: P(crossed by next pass) >= 0.25, the Bayes
+                                  # decision when a worn pass costs 3x a pass of abrasive life
 
 filter:
   n_particles: 2000
@@ -135,9 +137,9 @@ experiments:
   validation_draws: 40
   ablation_world: matched         # constant-force ablation (identifiability) in the tracker's own model
   noise_world: realistic
-  noise_draws: 30                 # first draws of the noise world, re-run at every noise level
-  ablation_draws: 40              # first draws of the ablation world, re-run with constant force
-  breakdown_draws: 30             # first draws, re-run in each single-mismatch and stress world
+  noise_draws: 20                 # first draws of the noise world, re-run at every noise level
+  ablation_draws: 25              # first draws of the ablation world, re-run with constant force
+  breakdown_draws: 20             # first draws, re-run in each single-mismatch and stress world
   noise_levels_um: [1.0, 2.0, 5.0, 10.0]
   crossing_decision_passes: [2, 5]
   contact_sweep_k: [1.0e-4, 30.0, 121]   # log-spaced k_pad sweep: [min, max, n]
@@ -146,4 +148,4 @@ experiments:
 tuning:
   draws: [200, 220]               # [first, last + 1]
   worlds: [matched, realistic]
-  rate_drift: [0.0, 0.05, 0.1, 0.15, 0.2]
+  rate_drift: [0.0, 0.05, 0.1, 0.15]

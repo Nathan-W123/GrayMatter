@@ -14,100 +14,80 @@
   "by_value": [
     {
       "rate_drift": 0.0,
-      "mean_interval_score": 0.12294175051028068,
+      "mean_interval_score": 0.1205426684063201,
       "worlds": {
         "matched": {
-          "interval_score": 0.06662704018873267,
-          "coverage": 0.9131578947368421,
-          "relative_width": 0.03879925689534922,
-          "mean_rmse_C_over_oracle": 4.695419643258802,
+          "interval_score": 0.0716809358784421,
+          "coverage": 0.9578947368421052,
+          "relative_width": 0.04471577549138409,
+          "mean_rmse_C_over_oracle": 1.443883177353111,
           "coverage_k_pad": 0.85
         },
         "realistic": {
-          "interval_score": 0.1792564608318287,
-          "coverage": 0.8078947368421052,
-          "relative_width": 0.10212385440063093,
-          "mean_rmse_C_over_oracle": 4.359431869613349,
+          "interval_score": 0.1694044009341981,
+          "coverage": 0.85,
+          "relative_width": 0.11379993932963717,
+          "mean_rmse_C_over_oracle": 2.7030501830541604,
           "coverage_k_pad": 0.05
         }
       }
     },
     {
       "rate_drift": 0.05,
-      "mean_interval_score": 0.10838990167049917,
+      "mean_interval_score": 0.11027862594457404,
       "worlds": {
         "matched": {
-          "interval_score": 0.06922209982565351,
-          "coverage": 0.9263157894736842,
-          "relative_width": 0.04079596304293077,
-          "mean_rmse_C_over_oracle": 4.714198009625298,
+          "interval_score": 0.07648901990011164,
+          "coverage": 0.9526315789473684,
+          "relative_width": 0.04748024495852774,
+          "mean_rmse_C_over_oracle": 1.4154939244210396,
           "coverage_k_pad": 0.85
         },
         "realistic": {
-          "interval_score": 0.14755770351534483,
-          "coverage": 0.8526315789473684,
-          "relative_width": 0.0919404152704146,
-          "mean_rmse_C_over_oracle": 4.066254154956657,
+          "interval_score": 0.14406823198903643,
+          "coverage": 0.9078947368421053,
+          "relative_width": 0.10433729024382077,
+          "mean_rmse_C_over_oracle": 2.57010525006306,
           "coverage_k_pad": 0.05
         }
       }
     },
     {
       "rate_drift": 0.1,
-      "mean_interval_score": 0.10666904243500205,
+      "mean_interval_score": 0.10971569342720804,
       "worlds": {
         "matched": {
-          "interval_score": 0.0717279092990926,
-          "coverage": 0.9315789473684211,
-          "relative_width": 0.04392323403284394,
-          "mean_rmse_C_over_oracle": 4.789605942324619,
+          "interval_score": 0.0790963017250278,
+          "coverage": 0.95,
+          "relative_width": 0.05044145728106887,
+          "mean_rmse_C_over_oracle": 1.4691498111708419,
           "coverage_k_pad": 0.85
         },
         "realistic": {
-          "interval_score": 0.14161017557091152,
-          "coverage": 0.9,
-          "relative_width": 0.09396397156137887,
-          "mean_rmse_C_over_oracle": 4.007628956532557,
+          "interval_score": 0.14033508512938828,
+          "coverage": 0.9210526315789473,
+          "relative_width": 0.1069408779758148,
+          "mean_rmse_C_over_oracle": 2.562732120722333,
           "coverage_k_pad": 0.05
         }
       }
     },
     {
       "rate_drift": 0.15,
-      "mean_interval_score": 0.10910097276621941,
+      "mean_interval_score": 0.11375457925547186,
       "worlds": {
         "matched": {
-          "interval_score": 0.07404282806749089,
+          "interval_score": 0.08194258479477444,
+          "coverage": 0.95,
+          "relative_width": 0.05396335035392408,
+          "mean_rmse_C_over_oracle": 1.551266905498382,
+          "coverage_k_pad": 0.85
+        },
+        "realistic": {
+          "interval_score": 0.1455665737161693,
           "coverage": 0.9236842105263158,
-          "relative_width": 0.047017573818418326,
-          "mean_rmse_C_over_oracle": 4.782525821199814,
-          "coverage_k_pad": 0.85
-        },
-        "realistic": {
-          "interval_score": 0.14415911746494794,
-          "coverage": 0.9,
-          "relative_width": 0.09869215699997413,
-          "mean_rmse_C_over_oracle": 4.020848753723324,
-          "coverage_k_pad": 0.05
-        }
-      }
-    },
-    {
-      "rate_drift": 0.2,
-      "mean_interval_score": 0.11132995771083766,
-      "worlds": {
-        "matched": {
-          "interval_score": 0.07625093439566799,
-          "coverage": 0.9263157894736842,
-          "relative_width": 0.050740262011986226,
-          "mean_rmse_C_over_oracle": 4.790850249369278,
-          "coverage_k_pad": 0.85
-        },
-        "realistic": {
-          "interval_score": 0.14640898102600733,
-          "coverage": 0.9078947368421053,
-          "relative_width": 0.10365949587178985,
-          "mean_rmse_C_over_oracle": 4.0483846023733925,
+          "relative_width": 0.11012127160968654,
+          "mean_rmse_C_over_oracle": 2.5939355952174363,
           "coverage_k_pad": 0.05
         }
       }
@@ -117,43 +97,43 @@
   "chosen_index": 2,
   "chosen": {
     "rate_drift": 0.1,
-    "mean_interval_score": 0.10666904243500205,
+    "mean_interval_score": 0.10971569342720804,
     "worlds": {
       "matched": {
-        "interval_score": 0.0717279092990926,
-        "coverage": 0.9315789473684211,
-        "relative_width": 0.04392323403284394,
-        "mean_rmse_C_over_oracle": 4.789605942324619,
+        "interval_score": 0.0790963017250278,
+        "coverage": 0.95,
+        "relative_width": 0.05044145728106887,
+        "mean_rmse_C_over_oracle": 1.4691498111708419,
         "coverage_k_pad": 0.85
       },
       "realistic": {
-        "interval_score": 0.14161017557091152,
-        "coverage": 0.9,
-        "relative_width": 0.09396397156137887,
-        "mean_rmse_C_over_oracle": 4.007628956532557,
+        "interval_score": 0.14033508512938828,
+        "coverage": 0.9210526315789473,
+        "relative_width": 0.1069408779758148,
+        "mean_rmse_C_over_oracle": 2.562732120722333,
         "coverage_k_pad": 0.05
       }
     }
   },
   "constant_rate": {
     "rate_drift": 0.0,
-    "mean_interval_score": 0.12294175051028068,
+    "mean_interval_score": 0.1205426684063201,
     "worlds": {
       "matched": {
-        "interval_score": 0.06662704018873267,
-        "coverage": 0.9131578947368421,
-        "relative_width": 0.03879925689534922,
-        "mean_rmse_C_over_oracle": 4.695419643258802,
+        "interval_score": 0.0716809358784421,
+        "coverage": 0.9578947368421052,
+        "relative_width": 0.04471577549138409,
+        "mean_rmse_C_over_oracle": 1.443883177353111,
         "coverage_k_pad": 0.85
       },
       "realistic": {
-        "interval_score": 0.1792564608318287,
-        "coverage": 0.8078947368421052,
-        "relative_width": 0.10212385440063093,
-        "mean_rmse_C_over_oracle": 4.359431869613349,
+        "interval_score": 0.1694044009341981,
+        "coverage": 0.85,
+        "relative_width": 0.11379993932963717,
+        "mean_rmse_C_over_oracle": 2.7030501830541604,
         "coverage_k_pad": 0.05
       }
     }
   },
-  "config_hash": "ec16fa90670f"
+  "config_hash": "bb6c41ead01c"
 }

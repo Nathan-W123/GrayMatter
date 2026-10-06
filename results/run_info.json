@@ -2,13 +2,13 @@
   "swt_version": "0.1.0",
   "python": "3.11.15",
   "numpy": "2.4.6",
-  "config_hash": "c2d209a8ee43",
-  "source_hash": "be688e68cb0e",
-  "experiment_seconds": 511.7,
-  "context_build_seconds": 6.9,
+  "config_hash": "95e687d951d8",
+  "source_hash": "9fecbb5fc670",
+  "experiment_seconds": 548.3,
+  "context_build_seconds": 8.8,
   "workers": 4,
   "cpu_count": 4,
-  "episodes": 630,
+  "episodes": 510,
   "config": {
     "seed": 2026,
     "geometry": {
@@ -56,7 +56,8 @@
       "wear_sigma_log": 0.01
     },
     "abrasive": {
-      "threshold_fraction": 0.5
+      "threshold_fraction": 0.5,
+      "risk_quantile": 0.25
     },
     "filter": {
       "n_particles": 2000,
@@ -66,6 +67,10 @@
       "rate_drift_fallback": 0.1,
       "wear_noise_range": [
         0.005,
+        0.05
+      ],
+      "transient_range": [
+        0.002,
         0.05
       ],
       "force_exponent_sd": 0.15,
@@ -142,6 +147,36 @@
           "texture_um": 1.5,
           "texture_corr_mm": 1.5
         }
+      },
+      "realistic_c": {
+        "pad": {
+          "kind": "foam",
+          "thickness_mm": 20.0
+        },
+        "removal": {
+          "preston_exponent": 0.85
+        },
+        "force": {
+          "gain_sigma_log": 0.03,
+          "ripple": 0.04,
+          "ripple_corr": 0.3
+        },
+        "wear": {
+          "kind": "two_stage",
+          "fast_fraction": 0.15,
+          "fast_ratio": 8.0,
+          "rings": 2
+        },
+        "scan": {
+          "registration_sigma_mm": 0.2,
+          "profile_bias_um": 0.3,
+          "outlier_fraction": 0.01,
+          "outlier_um": 10.0,
+          "dropout_fraction": 0.03,
+          "dropout_gap_points": 6,
+          "texture_um": 0.8,
+          "texture_corr_mm": 1.0
+        }
       }
     },
     "experiments": {
@@ -153,13 +188,16 @@
         "matched",
         "realistic"
       ],
-      "validation_world": "realistic_b",
-      "validation_draws": 50,
+      "validation_worlds": [
+        "realistic_b",
+        "realistic_c"
+      ],
+      "validation_draws": 40,
       "ablation_world": "matched",
       "noise_world": "realistic",
-      "noise_draws": 40,
-      "ablation_draws": 40,
-      "breakdown_draws": 30,
+      "noise_draws": 20,
+      "ablation_draws": 25,
+      "breakdown_draws": 20,
       "noise_levels_um": [
         1.0,
         2.0,
@@ -189,8 +227,7 @@
         0.0,
         0.05,
         0.1,
-        0.15,
-        0.2
+        0.15
       ]
     }
   }

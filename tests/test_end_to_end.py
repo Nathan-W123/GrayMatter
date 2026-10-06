@@ -38,6 +38,6 @@ def test_run_all_and_figures(tmp_path, capsys):
                                                          "only_wear", "only_scan", "realistic", "radial_wear"}
     assert on_disk["robustness"]["worlds"]["realistic_b"]["n_draws"] == 2
     assert on_disk["robustness"]["worlds"]["realistic_c"]["n_draws"] == 2
-    assert {"C", "D", "A", "R"} <= set(on_disk["abrasive_change"]["worlds"]["realistic"]["decision_rules"])
+    assert {"C", "C_risk", "D", "D_margin", "A", "R"} <= set(on_disk["abrasive_change"]["worlds"]["realistic"]["decision_rules"])
     assert (res / "abrasive_change_by_lead.csv").exists()
     assert "Robustness, realistic world, 3 hidden truths" in capsys.readouterr().out

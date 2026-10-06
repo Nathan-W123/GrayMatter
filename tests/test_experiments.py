@@ -42,3 +42,21 @@ def test_coverage_counts_use_the_interval_bounds():
     row["true_k_pad"] = 2.1
     assert not experiments.inside(row, "k_pad", "true_k_pad")
     assert experiments._outside(row, "k_pad", "true_k_pad") == np.float64((2.1 - 2.0) / 2.1)
+
+
+def test_decision_rules_score_change_passes():
+    """Two draws crossing at pass 4: C changes on time, D one pass late; the model-free rule
+    R is scored from the scanned means (here a 15% drop per pass, so it fires after pass 4)."""
+    rows = []
+    for d in range(2):
+        for p in range(1, 7):
+            rows.append({"draw": d, "pass": p, "cross_true": 4, "cross_A": 6, "force_N": 20.0,
+                         "scan_mean_um": 10.0 * 0.85 ** (p - 1),
+                         "cross_C_median": 4 if p >= 3 else 9, "cross_C_risk": 3 if p >= 2 else 9,
+                         "cross_D": 5 if p >= 3 else 9})
+    dr = experiments._decision_rules(rows, 6, 0.5, cost_ratio=3.0)
+    assert dr["C"]["exact"] == 2 and dr["C"]["mean_abs_err"] == 0.0
+    assert dr["D"]["late"] == 2 and dr["D"]["cost_late3"] == 3.0
+    assert dr["C_risk"]["early"] == 2 and dr["C_risk"]["cost_late3"] == 1.0
+    assert dr["A"]["mean_abs_err"] == 2.0
+    assert dr["R"]["n"] == 2

@@ -89,6 +89,11 @@ def iqr_summary(x) -> dict:
             "min": float(x.min()), "max": float(x.max())}
 
 
+def _gmean(x) -> float:
+    x = np.asarray(x, dtype=float)
+    return float(np.exp(np.mean(np.log(x)))) if x.size and np.all(x > 0) else float("nan")
+
+
 def write_csv(path: Path, rows: list[dict]) -> None:
     if not rows:
         path.write_text("")   # nothing to report (e.g. a tiny configuration); keep the file
@@ -114,6 +119,20 @@ def by_draw(rows: list[dict]) -> dict[int, list[dict]]:
 
 
 # --------------------------------------------------------------------------- one episode
+
+
+def regions(ctx: Context, blocks: tuple[int, int] = (4, 4)):
+    """Scan-point indices of a blocks[0] x blocks[1] grid of regions over the scan, and the
+    mean of the surrogate tables over each region (for map-level calibration checks)."""
+    if "_regions" not in ctx.__dict__:
+        ny, nx = ctx.obs_shape
+        iy = np.minimum(np.arange(ny) * blocks[0] // ny, blocks[0] - 1)
+        ix = np.minimum(np.arange(nx) * blocks[1] // nx, blocks[1] - 1)
+        lab = (iy[:, None] * blocks[1] + ix[None, :]).ravel()
+        index = [np.flatnonzero(lab == r) for r in range(blocks[0] * blocks[1])]
+        tables = np.array([ctx.table.X[ix_].mean(axis=0) for ix_ in index])
+        ctx.__dict__["_regions"] = (index, tables)
+    return ctx.__dict__["_regions"]
 
 
 def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: str = "alternating",
@@ -150,6 +169,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
     C = ParticleFilter(ctx.table, ctx.priors, ctx.pf, rng_for(seed, pf_stream, draw),
                        rollout_rng=rng_for(seed, 5, draw), obs_shape=ctx.obs_shape)
     cross_A = A.crossing_pass(schedule, ctx.threshold)
+    region_index, region_tables = regions(ctx)
     rows, maps = [], {}
     nan = float("nan")
     for n, action in enumerate(schedule):
@@ -165,6 +185,9 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
                  "D": D.predict(action) if full else None, "oracle": traj.oracle[n][oi]}
         p_lo, p_med, p_hi = C.predict_mean_removal(action)
         true_mean = float(true_obs.mean())
+        reg_q = C.predict_region_removal(action, region_tables)
+        reg_true = np.array([true_obs[ix].mean() for ix in region_index])
+        reg_inside = float(np.mean((reg_q[:, 0] <= reg_true) & (reg_true <= reg_q[:, 2])))
         scan = scanner.observe(traj.removal[n], scan_rng)
         A.update(scan, action)
         if full:
@@ -174,6 +197,8 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
         s = C.summary()
         cr = (C.predict_crossing(n + 1, schedule, ctx.threshold) if full
               else {"median": nan, "lo": nan, "hi": nan, "band_mass": nan})
+        q_risk = ctx.cfg["abrasive"].get("risk_quantile", 0.25)
+        cr_risk = C.predict_crossing(n + 1, schedule, ctx.threshold, q=(q_risk, 1 - q_risk))["lo"] if full else nan
         row = {
             "experiment": experiment, "world": world, "schedule": schedule_kind, "noise_um": noise, "draw": draw,
             "pass": n + 1, "force_N": action.force, "rpm": action.rpm,
@@ -187,6 +212,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
             "rmse_oracle_um": rmse_um(preds["oracle"], true_obs),
             "C_pred_mean_lo_um": float(p_lo) * UM, "C_pred_mean_median_um": float(p_med) * UM,
             "C_pred_mean_hi_um": float(p_hi) * UM, "C_pred_mean_inside": bool(p_lo <= true_mean <= p_hi),
+            "C_region_inside_fraction": reg_inside,
         }
         for name in ("k_pad", "K0", "lam", "K"):
             for stat in ("mean", "median", "lo", "hi"):
@@ -197,7 +223,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
             "B_k_pad": B.k_pad if full else nan, "B_K": B.K if full else nan,
             "D_k_pad": D.k_pad if full else nan, "D_K": D.K if full else nan, "D_lam": D.lam if full else nan,
             "cross_C_median": cr["median"], "cross_C_lo": cr["lo"], "cross_C_hi": cr["hi"],
-            "cross_C_band_mass": cr["band_mass"],
+            "cross_C_band_mass": cr["band_mass"], "cross_C_risk": cr_risk,
             "cross_D": D.crossing_pass(n + 1, schedule, ctx.threshold) if full else nan,
             "cross_A": cross_A, "cross_true": traj.crossing_pass,
         })
@@ -513,11 +539,8 @@ def _final_draw_summary(rows: list[dict]) -> dict:
         "true_final_K": last["true_K"], "cross_true": last["cross_true"], "cross_A": last["cross_A"],
         **{f"final_rmse_{k}_um": last[f"rmse_{k}_um"] for k in ESTS},
         "final_true_mean_removal_um": last["true_mean_removal_um"],
-        "mean_rmse_C_um": float(np.mean([r["rmse_C_um"] for r in rows])),
-        "mean_rmse_B_um": float(np.mean([r["rmse_B_um"] for r in rows])),
-        "mean_rmse_A_um": float(np.mean([r["rmse_A_um"] for r in rows])),
-        "mean_rmse_D_um": float(np.mean([r["rmse_D_um"] for r in rows])),
-        "mean_rmse_oracle_um": float(np.mean([r["rmse_oracle_um"] for r in later])) if later else float("nan"),
+        # over passes 2..N (pass 1 is a prior prediction for every estimator), geometric mean
+        **{f"mean_rmse_{k}_um": _gmean([r[f"rmse_{k}_um"] for r in later]) for k in ("A", "B", "C", "D", "oracle")},
         "n_passes_C_better_than_B": sum(r["rmse_C_um"] < r["rmse_B_um"] for r in rows),
         "n_passes_C_better_than_D": sum(r["rmse_C_um"] < r["rmse_D_um"] for r in rows),
         "predictive_inside_passes_2_on": int(sum(r["C_pred_mean_inside"] for r in later)),
@@ -602,6 +625,8 @@ def _predictive(rows: list[dict], n_passes: int) -> dict:
         "passes_2_on": {"inside": hits, "n": len(later), "fraction": hits / max(len(later), 1),
                         "below": below, "above": above},
         "relative_interval_score_passes_2_on": float(np.mean([interval_score(r) for r in later])) if later else None,
+        "regional_inside_fraction_passes_2_on": float(np.mean([r["C_region_inside_fraction"] for r in later]))
+        if later else None,
         "pass_1": {"inside": int(sum(r["C_pred_mean_inside"] for r in first)), "n": len(first)},
         "passes_2_to_5": frac(2, 5),
         "passes_11_on": frac(11, n_passes),
@@ -653,7 +678,8 @@ def breakdown_extra_worlds(ctx: Context) -> list[str]:
 def tuning_tasks(ctx: Context) -> list[tuple]:
     t = ctx.cfg["tuning"]
     lo, hi = (int(x) for x in t["draws"])
-    return [("tuning", w, d, float(v)) for v in t["rate_drift"] for w in t["worlds"] for d in range(lo, hi)]
+    values = tuple(float(v) for v in t["rate_drift"])
+    return [("tuning", w, d, values) for d in range(lo, hi) for w in t["worlds"]]
 
 
 def run_task(ctx: Context, task: tuple) -> dict:
@@ -671,11 +697,12 @@ def run_task(ctx: Context, task: tuple) -> dict:
     default = float(ctx.cfg["scan"]["noise_um"])
     out: dict[tuple, list[dict]] = {}
     traj = make_truth(ctx, d, "alternating", world)
-    if kind == "tuning":
+    if kind == "tuning":   # every candidate drift on the same hidden-truth trajectory
         import dataclasses
-        tctx = dataclasses.replace(ctx, pf=dataclasses.replace(ctx.pf, rate_drift=task[3]))
-        out[(kind, world, task[3])], _ = run_episode(tctx, d, world, "alternating", default, experiment=kind,
-                                                     traj=traj, full=False)
+        for v in task[3]:
+            tctx = dataclasses.replace(ctx, pf=dataclasses.replace(ctx.pf, rate_drift=v))
+            out[(kind, world, v)], _ = run_episode(tctx, d, world, "alternating", default, experiment=kind,
+                                                   traj=traj, full=False)
         return out
     out[(kind, world, default)], _ = run_episode(ctx, d, world, "alternating", default, experiment=kind, traj=traj)
     if kind != "robustness":
@@ -789,11 +816,14 @@ def experiment_tuning(ctx: Context, out: Path, verbose: bool = True, workers=1) 
 
 
 def _tuning_hash(cfg: dict) -> str:
-    """Hash of everything the tuning result depends on (the config without the tuned value)."""
+    """Hash of everything the tuning result depends on: the config without the tuned value
+    and the source of the simulation and estimation modules."""
     import copy
     c = copy.deepcopy(cfg)
     c["filter"].pop("rate_drift", None)
-    return config_hash(c)
+    skip = {"plots.py", "report.py", "cli.py", "__main__.py"}
+    src = b"".join(p.read_bytes() for p in sorted(Path(__file__).parent.glob("*.py")) if p.name not in skip)
+    return hashlib.sha256(config_hash(c).encode() + src).hexdigest()[:12]
 
 
 def set_rate_drift(ctx: Context, value: float) -> None:
@@ -1100,35 +1130,60 @@ def _crossing_records(rows: list[dict], n_passes: int, fixed: list[int]) -> list
     return recs
 
 
-def _decision_rules(rows: list[dict], n_passes: int, threshold: float) -> dict:
+def _model_free_change(rr: list[dict], threshold: float) -> int | None:
+    """Change pass chosen by the model-free rule R from the scanned mean removals alone."""
+    m = np.array([r["scan_mean_um"] for r in rr])
+    F = np.array([r["force_N"] for r in rr])
+    S_start = np.concatenate([[0.0], np.cumsum(m)[:-1]])
+    y = np.log(m / F)
+    for n in range(2, len(rr) + 1):            # decision after scan n (1-based)
+        cols = [np.ones(n), S_start[:n] + 0.5 * m[:n]]
+        if n >= 3 and np.ptp(F[:n]) > 0:
+            cols.append(np.log(F[:n]))
+        coef = np.linalg.lstsq(np.column_stack(cols), y[:n], rcond=None)[0]
+        if coef[1] * (S_start[n - 1] + m[n - 1]) < np.log(threshold):    # slope = -lambda
+            return n + 1
+    return None
+
+
+def _decision_rules(rows: list[dict], n_passes: int, threshold: float, cost_ratio: float = 3.0) -> dict:
     """Sequential abrasive-change decisions, scored against the true crossing.
 
     After each scanned pass n a rule decides whether pass n+1 runs on fresh
     abrasive. C: when its predicted probability that the crossing happens by
     pass n+1 is at least 50% (median of its crossing distribution <= n+1).
     D: when its point forecast is <= n+1. A: at its nominal crossing pass,
-    fixed in advance. R (reactive, no model): when the latest scan's mean
-    removal per newton falls below ``threshold`` times the first scan's.
+    fixed in advance. R (no model, scan means only): a least-squares fit of
+    log(scanned mean removal per newton) against the cumulative scanned
+    removal (at mid-pass), with a log-force term once two forces were seen,
+    extrapolated to the start of pass n+1; R fires when the extrapolated drop
+    from zero removal reaches ``threshold``.
     The ideal change pass is the true crossing c (first pass whose starting
     K < threshold * K0). Error = change pass - c (negative: early, abrasive
-    life wasted; positive: late, passes run on worn abrasive). A rule that has
+    life wasted; positive: late, passes run on worn abrasive). ``cost_late3``
+    is the mean cost when a pass run on worn abrasive costs ``cost_ratio``
+    times a pass of abrasive life thrown away; the cost-aware rules are
+    C_risk (change when P(crossed by the next pass) >= 1 / (1 + cost_ratio),
+    the Bayes decision for that cost ratio) and D_margin (D's forecast with a
+    fixed one-pass safety margin). A rule that has
     not fired by the end of the run counts as changing at pass n_passes + 1
     or later; only draws with c <= n_passes + 1 are scored, and changes
     before pass n_passes + 1 on the other draws are counted as premature.
     """
     last = n_passes + 1
     out = {}
-    per_rule: dict[str, list[tuple[int, int, bool]]] = {k: [] for k in ("C", "D", "A", "R")}
+    per_rule: dict[str, list[tuple[int, int, bool]]] = {k: [] for k in ("C", "C_risk", "D", "D_margin", "A", "R")}
     premature = {k: 0 for k in per_rule}
     later_draws = 0
     for rr in by_draw(rows).values():
         c = int(rr[0]["cross_true"])
-        ref = rr[0]["scan_mean_um"] / rr[0]["force_N"]
         change = {"A": int(rr[0]["cross_A"])}
         for key, fired in (("C", lambda r: r["cross_C_median"] <= r["pass"] + 1),
+                           ("C_risk", lambda r: r["cross_C_risk"] <= r["pass"] + 1),
                            ("D", lambda r: r["cross_D"] <= r["pass"] + 1),
-                           ("R", lambda r: r["scan_mean_um"] / r["force_N"] < threshold * ref)):
+                           ("D_margin", lambda r: r["cross_D"] - 1 <= r["pass"] + 1)):
             change[key] = next((int(r["pass"]) + 1 for r in rr if fired(r)), None)
+        change["R"] = _model_free_change(rr, threshold)
         if c > last:
             later_draws += 1
             for k, v in change.items():
@@ -1145,7 +1200,8 @@ def _decision_rules(rows: list[dict], n_passes: int, threshold: float) -> dict:
                   "mean_passes_late": float(np.mean(np.maximum(e, 0))),
                   "mean_passes_early": float(np.mean(np.maximum(-e, 0))),
                   "not_fired": int(sum(nf for _, _, nf in recs)),
-                  "premature_on_later_draws": int(premature[k])}
+                  "premature_on_later_draws": int(premature[k]),
+                  "cost_late3": float(np.mean(cost_ratio * np.maximum(e, 0) + np.maximum(-e, 0)))}
     out["draws_crossing_after_run"] = later_draws
     return out
 

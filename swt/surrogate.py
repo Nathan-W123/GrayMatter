@@ -39,6 +39,18 @@ from .process import ProcessModel
 N_TAB = 4   # orders 0..3 of the within-pass wear expansion
 
 
+def _gram(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """sum_i A[i, a, e] * B[i, b, e] -> (e, a, b); A, B of shape (m, N_TAB, n)."""
+    out = np.empty((A.shape[2], N_TAB, N_TAB))
+    sym = A is B
+    for a in range(N_TAB):
+        for b in range(a if sym else 0, N_TAB):
+            out[:, a, b] = np.einsum("ie,ie->e", A[:, a], B[:, b])
+            if sym:
+                out[:, b, a] = out[:, a, b]
+    return out
+
+
 @dataclass
 class ScanStats:
     """Sufficient statistics of one (masked) scan for the surrogate likelihood."""
@@ -207,21 +219,33 @@ class ExposureTable:
         bad = np.flatnonzero(~valid)
         if bad.size:
             Xb = self.X[bad]
-            Gd = Gd - np.einsum("iae,ibe->eab", Xb, Xb)
-            Go = Go - np.einsum("iae,ibe->eab", Xb[:, :, :-1], Xb[:, :, 1:])
+            Gd = Gd - _gram(Xb, Xb)
+            Go = Go - _gram(Xb[:, :, :-1], Xb[:, :, 1:])
         yy = float(yv @ yv)
         if rho > 0 and shape is not None:
             ny, nx = shape
-            vg = valid.reshape(ny, nx).astype(float)
-            Xg = self.X.reshape(ny, nx, -1).transpose(1, 0, 2)              # (nx, ny, N_TAB * n_eta)
-            Xs = np.matmul(vg.T[:, None, :], Xg)[:, 0].reshape(nx, N_TAB, self.n_eta)
+            n_col = valid.reshape(ny, nx).sum(axis=0).astype(float)
+            Xs = self._column_sums(shape)                                   # (nx, N_TAB, n_eta), all points
+            if bad.size:                                                    # minus the masked points
+                onehot = np.zeros((nx, bad.size))
+                onehot[bad % nx, np.arange(bad.size)] = 1.0
+                Xs = Xs - (onehot @ Xb.reshape(bad.size, -1)).reshape(Xs.shape)
             ys = yv.reshape(ny, nx).sum(axis=0)
-            kap = rho / (1.0 + vg.sum(axis=0) * rho)
+            kap = rho / (1.0 + n_col * rho)
             yy -= float(kap @ ys**2)
-            Y = Y - np.einsum("x,x,xce->ce", kap, ys, Xs)
-            Gd = Gd - np.einsum("x,xae,xbe->eab", kap, Xs, Xs)
-            Go = Go - np.einsum("x,xae,xbe->eab", kap, Xs[:, :, :-1], Xs[:, :, 1:])
+            Y = Y - ((kap * ys) @ Xs.reshape(nx, -1)).reshape(N_TAB, self.n_eta)
+            Xw = Xs * np.sqrt(kap)[:, None, None]
+            Gd = Gd - _gram(Xw, Xw)
+            Go = Go - _gram(Xw[:, :, :-1], Xw[:, :, 1:])
         return ScanStats(Y, yy, Gd, Go, int(valid.sum()))
+
+    def _column_sums(self, shape: tuple[int, int]) -> np.ndarray:
+        """Sum of the tables over every scan profile (column of ``shape``), cached."""
+        cache = self.__dict__.setdefault("_colsum", {})
+        if shape not in cache:
+            ny, nx = shape
+            cache[shape] = self.X.reshape(ny, nx, N_TAB, self.n_eta).sum(axis=0)
+        return cache[shape]
 
     def sse(self, eta: np.ndarray, a: np.ndarray, z: np.ndarray, st: ScanStats) -> np.ndarray:
         """||y - predicted||^2 over the valid scan points for many particles, exactly
