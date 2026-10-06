@@ -144,7 +144,7 @@ def d_obs_sd(pf) -> float:
 def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: str = "alternating",
                 noise_um: float | None = None, experiment: str = "", record_maps: tuple[int, ...] = (),
                 traj=None, full: bool = True, pf_stream: int = 4, with_D: bool | None = None,
-                risk: bool = True) -> tuple[list[dict], dict]:
+                risk: bool = True, with_B: bool | None = None) -> tuple[list[dict], dict]:
     """Run all estimators through one sequence of passes on one hidden truth.
 
     Each pass: (1) every estimator predicts the removal map of the coming pass
@@ -158,7 +158,8 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
     ``pf_stream`` selects the particle filter's random stream (a different value
     re-runs the identical problem with a different Monte Carlo seed).
     ``with_D`` runs baseline D even when ``full`` is False (tuning of its decision margin);
-    ``risk=False`` skips C's second crossing quantile (only the decision rules use it).
+    ``risk=False`` skips C's second crossing quantile (only the decision rules use it);
+    ``with_B=False`` skips baseline B (not reported for the single-effect and stress worlds).
     """
     cfg = ctx.cfg
     seed = cfg["seed"]
@@ -173,7 +174,8 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
     oi = ctx.obs_index
     nominal_cache = ctx.__dict__.setdefault("_nominal_cache", {})
     A = Nominal(ctx.model, ctx.priors, oi, nominal_cache)
-    B = CalibrateOnce(ctx.model, ctx.priors, ctx.table, oi, nominal_cache) if full else None
+    use_B = full if with_B is None else with_B
+    B = CalibrateOnce(ctx.model, ctx.priors, ctx.table, oi, nominal_cache) if use_B else None
     use_D = full if with_D is None else with_D
     D = RefitEachPass(ctx.priors, ctx.table, force_ref=float(cfg["pad"]["reference_force_N"]),
                       force_exponent_sd=ctx.pf.force_exponent_sd, obs_sd=d_obs_sd(ctx.pf)) if use_D else None
@@ -192,7 +194,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
         true_obs = traj.removal[n][oi]
         # oracle: true physics and the true state after the previous pass, but not the
         # wear fluctuation drawn after it (pass 1: the true initial state)
-        preds = {"A": A.predict(action), "B": B.predict(action) if full else None, "C": C.predict(action),
+        preds = {"A": A.predict(action), "B": B.predict(action) if use_B else None, "C": C.predict(action),
                  "D": D.predict(action) if use_D else None, "oracle": traj.oracle[n][oi]}
         p_lo, p_med, p_hi = C.predict_mean_removal(action)
         true_mean = float(true_obs.mean())
@@ -201,7 +203,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
         reg_inside = float(np.mean((reg_q[:, 0] <= reg_true) & (reg_true <= reg_q[:, 2])))
         scan = scanner.observe(traj.removal[n], scan_rng)
         A.update(scan, action)
-        if full:
+        if use_B:
             B.update(scan, action)
         if use_D:
             D.update(scan, action)
@@ -219,7 +221,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
             "true_force_gain": truth.force_gain,
             "true_mean_removal_um": true_mean * UM, "scan_mean_um": float(np.nanmean(scan)) * UM,
             "rmse_A_um": rmse_um(preds["A"], true_obs),
-            "rmse_B_um": rmse_um(preds["B"], true_obs) if full else nan,
+            "rmse_B_um": rmse_um(preds["B"], true_obs) if use_B else nan,
             "rmse_C_um": rmse_um(preds["C"], true_obs),
             "rmse_D_um": rmse_um(preds["D"], true_obs) if use_D else nan,
             "rmse_oracle_um": rmse_um(preds["oracle"], true_obs),
@@ -233,7 +235,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
         row.update({
             "C_corr_logk_logK": s["corr_logk_logK"], "C_stages": s["stages"],
             "C_sigma_um": s["sigma_um"], "C_profile_sd_um": s["profile_sd_um"], "C_wear_noise": s["wear_noise"], "C_transient_noise": s["transient_noise"], "C_min_path_diversity": s["min_path_diversity"], "C_outliers": s["outliers"], "C_redone": bool(s["redone"]),
-            "B_k_pad": B.k_pad if full else nan, "B_K": B.K if full else nan,
+            "B_k_pad": B.k_pad if use_B else nan, "B_K": B.K if use_B else nan,
             "D_k_pad": D.k_pad if use_D else nan, "D_K": D.K if use_D else nan, "D_lam": D.lam if use_D else nan,
             "D_next_ratio": D.next_ratio() if use_D else nan,
             "cross_C_median": cr["median"], "cross_C_lo": cr["lo"], "cross_C_hi": cr["hi"],
@@ -754,7 +756,7 @@ def run_task(ctx: Context, task: tuple) -> dict:
                                                    traj=traj, full=False, with_D=(i == 0))
         return out
     out[(kind, world, default)], _ = run_episode(ctx, d, world, "alternating", default, experiment=kind, traj=traj,
-                                                 risk=(kind == "robustness"))
+                                                 risk=(kind == "robustness"), with_B=(kind == "robustness"))
     if kind != "robustness":
         return out
     if world == e.get("ablation_world", "matched") and d < int(e.get("ablation_draws", e["robustness_draws"])):
@@ -1498,7 +1500,7 @@ def experiment_breakdown(ctx: Context, out: Path, runs: dict, verbose: bool = Tr
         summary["worlds"][w] = s
         table.append({
             "world": w, "n_draws": len(finals),
-            "final_rmse_A_um": s["final_rmse_um"]["A"]["median"], "final_rmse_B_um": s["final_rmse_um"]["B"]["median"],
+            "final_rmse_A_um": s["final_rmse_um"]["A"]["median"],
             "final_rmse_C_um": s["final_rmse_um"]["C"]["median"],
             "final_rmse_oracle_um": s["final_rmse_um"]["oracle"]["median"],
             "C_over_oracle": s["final_rmse_C_over_oracle"]["median"],
@@ -1533,7 +1535,9 @@ def run_all(ctx: Context, out_dir: str | Path = "results", verbose: bool = True,
     tuning = None
     if str(ctx.cfg["filter"].get("rate_drift", "auto")) == "auto":
         if verbose:
-            print(f"\nTuning the wear-rate drift and the decision margins ({len(tuning_tasks(ctx))} held-out draws)...")
+            t = ctx.cfg["tuning"]
+            print(f"\nTuning the wear-rate drift and the decision margins (held-out draws {t['draws'][0]}-"
+                  f"{t['draws'][1] - 1} in {len(t['worlds'])} worlds)...")
         tuning = experiment_tuning(ctx, out, verbose, workers)
     main = experiment_main(ctx, out, verbose)
     if verbose:

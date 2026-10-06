@@ -2,13 +2,13 @@
   "swt_version": "0.1.0",
   "python": "3.11.15",
   "numpy": "2.4.6",
-  "config_hash": "f004093238a9",
-  "source_hash": "800e6ad8abeb",
-  "experiment_seconds": 552.6,
-  "context_build_seconds": 8.5,
+  "config_hash": "c5f71476f734",
+  "source_hash": "288a742e2309",
+  "experiment_seconds": 532.0,
+  "context_build_seconds": 8.8,
   "workers": 4,
   "cpu_count": 4,
-  "episodes": 498,
+  "episodes": 452,
   "config": {
     "seed": 2026,
     "geometry": {
@@ -213,10 +213,11 @@
       "validation_draws": 40,
       "ablation_world": "matched",
       "noise_world": "realistic",
-      "noise_draws": 20,
-      "ablation_draws": 25,
-      "breakdown_draws": 16,
+      "noise_draws": 12,
+      "ablation_draws": 20,
+      "breakdown_draws": 12,
       "noise_levels_um": [
+        1.0,
         2.0,
         5.0,
         10.0

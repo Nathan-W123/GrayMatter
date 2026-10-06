@@ -96,7 +96,7 @@ def least_squares_fit(table: ExposureTable, scan: np.ndarray, action: PassAction
     st = table.scan_stats(scan, valid)
     s = action.rpm / table.model.sander.spindle_rpm
     F = action.force
-    lk = np.linspace(np.log(k_bounds[0]), np.log(k_bounds[1]), 4001)
+    lk = np.linspace(np.log(k_bounds[0]), np.log(k_bounds[1]), 1001)
     z = 0.0
     for _ in range(1 + (iterations if lam > 0 else 0)):
         _, sse = table.profile_sse(F / np.exp(lk), st, z)
@@ -197,7 +197,7 @@ class RefitEachPass:
         self.rpm_ref = table.model.sander.spindle_rpm
         self.stats: list = []              # per scan: (ScanStats, action)
         self.Ks: list[float] = []          # fitted K at the start of each scanned pass (effective, at its force)
-        self.lk_grid = np.linspace(np.log(self.k_bounds[0]), np.log(self.k_bounds[1]), 2001)
+        self.lk_grid = np.linspace(np.log(self.k_bounds[0]), np.log(self.k_bounds[1]), 501)
 
     @property
     def last_action(self) -> PassAction | None:

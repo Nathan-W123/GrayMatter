@@ -150,10 +150,10 @@ experiments:
   validation_draws: 40
   ablation_world: matched         # constant-force ablation (identifiability) in the tracker's own model
   noise_world: realistic
-  noise_draws: 20                 # first draws of the noise world, re-run at every noise level
-  ablation_draws: 25              # first draws of the ablation world, re-run with constant force
-  breakdown_draws: 16             # first draws, re-run in each single-mismatch and stress world
-  noise_levels_um: [2.0, 5.0, 10.0]
+  noise_draws: 12                 # first draws of the noise world, re-run at every noise level
+  ablation_draws: 20              # first draws of the ablation world, re-run with constant force
+  breakdown_draws: 12             # first draws, re-run in each single-mismatch and stress world
+  noise_levels_um: [1.0, 2.0, 5.0, 10.0]
   crossing_decision_passes: [2, 5]
   contact_sweep_k: [1.0e-4, 30.0, 121]   # log-spaced k_pad sweep: [min, max, n]
 

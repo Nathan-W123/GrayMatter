@@ -138,7 +138,7 @@ All four see the commanded action of every pass and the scans, and nothing else;
 ### 3.8 Tuning, development and what changed after the first full run
 Two kinds of setting are tuned by the pipeline, both on held-out draws: C's wear-rate drift `δ`, and the safety margins of D's and R's abrasive-change rules (section 4.4; C's rules need none). `run-all` runs C with each `δ` of 0, 0.05, 0.1 and 0.15 on held-out draws 200–215 in the matched and realistic worlds, and keeps the value with the lowest mean *interval score* of the 90% predictive interval of next-pass mean removal (a proper scoring rule: interval width plus 20× any miss; Gneiting & Raftery 2007). It chose **δ = 0.1**.
 
-**What changed after the first full run.** This README reports the fourth full run on draws 0–99. After each of the first three, an independent review pointed out weaknesses, and these changes were made. *Rounds 1–2:* D gained within-pass wear, outlier rejection, a force term, a pooled stiffness and a first-scan `K0`; C's heuristic adaptive process noise was replaced by the learned `σ_w`, and a full-path sweep, the force exponent `β` and the transient gain `g` were added; the "mean over passes" comparison excludes pass 1 (a prior prediction for every estimator) and uses a geometric mean; the realistic world gained the Preston exponent and the scan texture, and ring-wise wear (6 rings) was moved to a stress test. *Round 3:* the abrasive-change evaluation became a set of sequential decision rules scored by cost against a model-free rule, and a block-level calibration check was added. The `realistic_c` world and the final C were committed together (commit `88ea220`) before C was run in it; C has not changed since. *Round 4:* the third review found that C's accuracy edge over D under mismatch came almost entirely from passes 2–3, and that C's decision rule had been compared with an untuned D. So D now uses C's priors on `λ` and `β` (a MAP fit), the comparison is split into start-up (passes 2–3) and steady state (passes 4–20), and the decision rules of D and R get safety margins tuned on held-out draws for each cost ratio. The physics gained mild ring-wise wear (two rings) in the realistic world, and abrasive loading and a tilting pad holder as stress tests. The realistic world therefore changed after C was frozen (it became harder); the pre-registered worlds did not. *Run time:* to keep `run-all` under 10 minutes, the scan statistics are computed with fewer passes over the tables (equal to rounding error, checked against the direct formula by a test), tuning shares each hidden truth across the candidate drifts, the single-effect and stress worlds use 16 draws, the noise study 20 draws at 2, 5 and 10 µm, the ablation 25 draws, and the tuning 16 held-out draws per world over δ = 0, 0.05, 0.1 and 0.15 (δ = 0.2 had scored worse than 0.1 and 0.15 in the third run). All checks behind these changes used held-out draws 200–239 only. Other settings (75% ESS target, one final full-path sweep, outlier threshold 5, the `σ_w`, `σ_g` and `β` priors) were fixed by hand during development.
+**What changed after the first full run.** This README reports the fourth full run on draws 0–99. After each of the first three, an independent review pointed out weaknesses, and these changes were made. *Rounds 1–2:* D gained within-pass wear, outlier rejection, a force term, a pooled stiffness and a first-scan `K0`; C's heuristic adaptive process noise was replaced by the learned `σ_w`, and a full-path sweep, the force exponent `β` and the transient gain `g` were added; the "mean over passes" comparison excludes pass 1 (a prior prediction for every estimator) and uses a geometric mean; the realistic world gained the Preston exponent and the scan texture, and ring-wise wear (6 rings) was moved to a stress test. *Round 3:* the abrasive-change evaluation became a set of sequential decision rules scored by cost against a model-free rule, and a block-level calibration check was added. The `realistic_c` world and the final C were committed together (commit `88ea220`) before C was run in it; C has not changed since. *Round 4:* the third review found that C's accuracy edge over D under mismatch came almost entirely from passes 2–3, and that C's decision rule had been compared with an untuned D. So D now uses C's priors on `λ` and `β` (a MAP fit), the comparison is split into start-up (passes 2–3) and steady state (passes 4–20), and the decision rules of D and R get safety margins tuned on held-out draws for each cost ratio. The physics gained mild ring-wise wear (two rings) in the realistic world, and abrasive loading and a tilting pad holder as stress tests. The realistic world therefore changed after C was frozen (it became harder); the pre-registered worlds did not. *Run time:* to keep `run-all` under 10 minutes, the scan statistics are computed with fewer passes over the tables (equal to rounding error, checked against the direct formula by a test), tuning shares each hidden truth across the candidate drifts, the single-effect and stress worlds use 12 draws (and skip baseline B, which is not reported for them), the noise study 12 draws at 1, 2, 5 and 10 µm, the ablation 20 draws, D's stiffness search starts from a coarser grid before its bounded optimiser, and the tuning 16 held-out draws per world over δ = 0, 0.05, 0.1 and 0.15 (δ = 0.2 had scored worse than 0.1 and 0.15 in the third run). All checks behind these changes used held-out draws 200–239 only. Other settings (75% ESS target, one final full-path sweep, outlier threshold 5, the `σ_w`, `σ_g` and `β` priors) were fixed by hand during development.
 
 ## 4. Results
 
@@ -211,29 +211,29 @@ The draw is chosen by a rule that looks only at the sampled truths: among the 10
 
 ### 4.3 What each unmodelled effect costs
 
-Each group of the realistic world was also run alone, on the first 16 draws (same draws in every world; figure 7, left), plus the three stress tests.
+Each group of the realistic world was also run alone, on the first 12 draws (same draws in every world; figure 7, left), plus the three stress tests.
 
-| world (16 draws, pass 20) | C RMSE [µm] | D RMSE [µm] | oracle [µm] | C / oracle | predictive coverage (misses below↓ above↑) | crossing error, last pass before (mean, passes) |
+| world (12 draws, pass 20) | C RMSE [µm] | D RMSE [µm] | oracle [µm] | C / oracle | predictive coverage (misses below↓ above↑) | crossing error, last pass before (mean, passes) |
 |---|---|---|---|---|---|---|
-| matched | 0.068 | 0.060 | 0.063 | 1.41 | 96% (4↓ 9↑) | 0.19 |
-| foam pad only | 0.078 | 0.077 | 0.063 | 1.43 | 95% (6↓ 9↑) | 0.19 |
-| Preston exponent only | 0.257 | 0.258 | 0.060 | 4.85 | 95% (5↓ 9↑) | 0.36 |
-| force errors only | 0.174 | 0.166 | 0.157 | 0.98 | 85% (20↓ 25↑) | 0.62 |
-| two-stage and two-ring wear only | 0.390 | 0.394 | 0.053 | 7.32 | 94% (14↓ 5↑) | 0.56 |
-| scanner effects only | 0.083 | 0.152 | 0.063 | 1.35 | 93% (1↓ 19↑) | 0.12 |
-| realistic (all of the above) | 0.390 | 0.413 | 0.103 | 3.74 | 87% (5↓ 35↑) | 0.62 |
-| stress test: ring-wise wear | 0.600 | 0.601 | 0.060 | 10.00 | 89% (30↓ 3↑) | 0.38 |
-| stress test: tilting pad holder | 2.570 | 2.548 | 0.067 | 38.22 | 34% (0↓ 201↑) | 0.19 |
-| stress test: abrasive loading | 0.386 | 0.199 | 0.060 | 6.86 | 51% (0↓ 148↑) | 1.93 |
+| matched | 0.073 | 0.069 | 0.061 | 1.58 | 96% (3↓ 6↑) | 0.25 |
+| foam pad only | 0.078 | 0.085 | 0.061 | 1.73 | 95% (5↓ 7↑) | 0.25 |
+| Preston exponent only | 0.257 | 0.258 | 0.059 | 4.49 | 96% (4↓ 5↑) | 0.30 |
+| force errors only | 0.174 | 0.166 | 0.157 | 0.95 | 86% (16↓ 16↑) | 0.58 |
+| two-stage and two-ring wear only | 0.390 | 0.394 | 0.052 | 7.62 | 96% (7↓ 3↑) | 0.50 |
+| scanner effects only | 0.055 | 0.155 | 0.061 | 1.06 | 95% (1↓ 10↑) | 0.00 |
+| realistic (all of the above) | 0.390 | 0.413 | 0.109 | 3.59 | 87% (4↓ 25↑) | 0.42 |
+| stress test: ring-wise wear | 0.600 | 0.601 | 0.058 | 10.00 | 90% (21↓ 2↑) | 0.42 |
+| stress test: tilting pad holder | 2.570 | 2.548 | 0.064 | 38.22 | 33% (0↓ 152↑) | 0.25 |
+| stress test: abrasive loading | 0.326 | 0.199 | 0.057 | 6.74 | 53% (0↓ 108↑) | 1.90 |
 
 * **Preston exponent:** C and D both learn the force dependence (`β`), so the alternating 20/40 N schedule no longer produces alternating biases, but the flatter `p^0.8` pressure profile cannot be reproduced by any linear-pad stiffness: a large cost in map accuracy, second only to uneven wear.
 * **Force errors** raise everyone's error, the oracle's included (the line-to-line ripple is unpredictable). D is slightly more accurate than C here, and C's intervals under-cover with misses on both sides.
-* **Two-stage and two-ring wear** is the largest single cost: C and D are equally accurate and about 7 times worse than the oracle. When the centre of the pad face dulls faster than its rim, the shape of the removal map changes, which neither model represents; C's drifting wear rate follows the slowing decay of the two-stage law.
+* **Two-stage and two-ring wear** is the largest single cost: C and D are equally accurate and about 8 times worse than the oracle. When the centre of the pad face dulls faster than its rim, the shape of the removal map changes, which neither model represents; C's drifting wear rate follows the slowing decay of the two-stage law.
 * **Scanner effects** hurt D (no offset model, simple outlier rejection) more than C, whose per-profile offset model and innovation gating absorb most of them (the tests check both). C does not correct misregistration, and treats the scan texture, which is correlated between consecutive scans, as noise.
 * **The foam pad** changes the map noticeably only for soft pads; stiffness becomes an effective value.
 * **Ring-wise wear with six rings (stress test)** makes uneven wear worse: C and D fail alike, at about 10 times the oracle's error, and C's predictions are mostly too high. A tracker for such pads would need a ring-resolved effectiveness.
-* **Tilting holder (stress test)** defeats both trackers: their error is about 38 times the oracle's and C's intervals cover 34%, and in every miss the interval lies below the truth. Pressure moves towards the overhanging edges, which a rigid-holder model cannot represent; edge stations need the tilt in the model.
-* **Abrasive loading (stress test)** hurts C more than D: C's error is 0.386 µm against D's 0.199 µm, its intervals cover 51%, with the interval below the truth in every miss, and its crossing forecasts are off by 1.9 passes on average. C apparently reads the loss of cutting as wear and predicts too little removal once the loading is shed. A loading state would have to be tracked separately.
+* **Tilting holder (stress test)** defeats both trackers: their error is about 38 times the oracle's and C's intervals cover 33%, and in every miss the interval lies below the truth. Pressure moves towards the overhanging edges, which a rigid-holder model cannot represent; edge stations need the tilt in the model.
+* **Abrasive loading (stress test)** hurts C more than D: C's error is 0.326 µm against D's 0.199 µm, its intervals cover 53%, with the interval below the truth in every miss, and its crossing forecasts are off by 1.9 passes on average. C apparently reads the loss of cutting as wear and predicts too little removal once the loading is shed. A loading state would have to be tracked separately.
 
 ![Mismatch and calibration](figures/fig7_mismatch_and_calibration.png)
 
@@ -306,24 +306,24 @@ Larger drifts raise the realistic world's coverage further but widen the interva
 
 ### 4.6 Identifiability ablation: constant 30 N instead of alternating 20/40 N
 
-On the first 25 draws of the matched world, a constant 30 N schedule (same mean force) was compared with the alternating one, and a re-run of the alternating schedule with a different filter seed gives the spread expected from Monte Carlo noise alone.
+On the first 20 draws of the matched world, a constant 30 N schedule (same mean force) was compared with the alternating one, and a re-run of the alternating schedule with a different filter seed gives the spread expected from Monte Carlo noise alone.
 
 | Paired over draws, pass 20 | constant ÷ alternating | other seed ÷ alternating |
 |---|---|---|
-| k_pad 90% width, median ratio (draws wider) | 0.998 (12 of 25) | 1.010 (14) |
-| λ 90% width, median ratio (draws wider) | 1.091 (24) | 0.998 (12) |
+| k_pad 90% width, median ratio (draws wider) | 1.016 (10 of 20) | 1.007 (11) |
+| λ 90% width, median ratio (draws wider) | 1.094 (20) | 0.992 (9) |
 
 **This did not show what was expected.** Alternating the force did not narrow the stiffness interval at all. Because the force is commanded and known, a single force level already pins `F / k_pad` from the shape of one removal map; a second force adds a second view of the same thing. Alternating did narrow the wear-rate interval slightly and consistently, because two forces remove different volumes and so trace the wear law at two rates. Varying the force would matter if something else also changed the contact shape (an unknown force offset, uncertain curvature, a drifting pad); with the realistic world's force-calibration error it could help separate gain from effectiveness, which was not tested.
 
 ![Ablation and noise](figures/fig6_ablation_and_noise.png)
 
-### 4.7 Scan-noise sensitivity (realistic world, first 20 draws)
+### 4.7 Scan-noise sensitivity (realistic world, first 12 draws)
 
-| scan noise σ [µm] | 2 (default) | 5 | 10 |
-|---|---|---|---|
-| C pass-20 RMSE, median [µm] | 0.386 | 0.390 | 0.390 |
-| oracle, median [µm] | 0.101 | 0.101 | 0.101 |
-| predictive coverage | 88% | 91% | 93% |
+| scan noise σ [µm] | 1 | 2 (default) | 5 | 10 |
+|---|---|---|---|---|
+| C pass-20 RMSE, median [µm] | 0.390 | 0.390 | 0.404 | 0.403 |
+| oracle, median [µm] | 0.109 | 0.109 | 0.109 | 0.109 |
+| predictive coverage | 83% | 87% | 91% | 93% |
 
 In the realistic world C's error barely depends on scan noise up to 10 µm: with thousands of points per scan the noise averages out, and the error is dominated by what neither scans nor the oracle can predict (force ripple, fluctuations) and by model mismatch. Coverage rises with the noise because noisier scans leave C less certain, which partly offsets the mismatch.
 
@@ -355,6 +355,8 @@ In both pre-registered worlds C's first two predictions were better than D's, an
 * **Long-range abrasive-change forecasts** are biased early when the wear law has a break-in phase (section 4.4).
 * **Registration error is not corrected**; C treats misregistration as structured noise.
 * **Winkler-type pad.** Both pad laws are independent springs: no shear coupling and no bending of the backing plate; holder tilt is simulated only in a stress test (with a linear pad), and its stiffness is assumed, not measured. The contact uses the nominal (CAD) surface; removal is not fed back into the contact.
+* **Wear law form assumed.** Exponential (and, in the mismatch worlds, two-stage) decay with removed volume, by analogy with the grinding G-ratio; neither the form nor the volume-versus-work driver was checked against data.
+* **Simulated scans.** Every scan is the simulator's removal map plus synthetic noise and artefacts; no real scanner data was used.
 * **One abrasive, removal depth only.** One grit per run; no roughness or other finish metric (the scan texture is a measurement effect only).
 * **Grid effects.** The 1 mm grid quantises the stiffest contact strips (section 3.2).
 * **Surrogate.** C's table has a worst-case relative error of 1.7e-03 against the exact model, at the fastest-wearing draws (third-order expansion of the within-pass wear).
@@ -368,7 +370,8 @@ In both pre-registered worlds C's first two predictions were better than D's, an
 4. **Register each scan to the prediction** (two shifts per scan as nuisance parameters) before updating.
 5. **Replace the spring pad** with a finite-element or learned pad model, and give the tracker the holder tilt (measured tilt stiffness) so that edge stations are predicted correctly.
 6. **Run on GrayMatter-style scan data** with real registration error, missing data and noise.
-7. **Close the loop**: choose the next pass's force or dwell from C's predictive distribution to hit a target removal, and set the abrasive-change cost ratio from real costs of a worn pass and of discarded abrasive.
+7. **Predict roughness, not only removal depth**: add a surface-finish state per grit (and its scan measurement) so the tracker can say when a pass will leave the required finish.
+8. **Close the loop**: choose the next pass's force or dwell from C's predictive distribution to hit a target removal, and set the abrasive-change cost ratio from real costs of a worn pass and of discarded abrasive.
 
 ## 7. How to reproduce
 
@@ -383,7 +386,7 @@ python -m swt run --config configs/default.yaml    # main 20-pass experiment onl
 python -m pytest -q                      # tests
 ```
 
-* **Runtime.** `run-all` runs 498 multi-draw episodes, plus the tuning runs and the main run, using `min(4, CPUs)` worker processes. In the recorded run, building the model and surrogate took 8 s and the experiments 553 s with 4 workers on a 4-CPU machine. `--workers 1` runs serially; results are identical for any worker count because every task has its own seeds.
+* **Runtime.** `run-all` runs 452 multi-draw episodes, plus the tuning runs and the main run, using `min(4, CPUs)` worker processes. In the recorded run, building the model and surrogate took 9 s and the experiments 532 s with 4 workers on a 4-CPU machine. `--workers 1` runs serially; results are identical for any worker count because every task has its own seeds.
 * **Outputs.** `results/` holds per-pass CSVs, per-draw CSVs, JSON summaries and `run_info.json` (config, versions, source hash). `summary.json` gathers everything. `figures/` holds seven PNGs drawn only from `results/` (`python -m swt figures` redraws them).
 * **How the documents are made.** `README.md` and `SUMMARY.md` are rendered from `docs/*.template.md`, in which every number is a lookup into `results/summary.json` or `results/run_info.json`. A test fails if the shipped documents differ from what the templates render from the shipped results.
 * **Changing the model.** Edit `configs/default.yaml` (geometry, pad, sander, path, schedule, scan, priors, filter, worlds, experiments, tuning) and rerun. The prose describes the default configuration.
