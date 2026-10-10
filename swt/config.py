@@ -141,7 +141,8 @@ def make_world(name: str, spec: dict) -> tuple[World, ScanArtefacts]:
                   float(f.get("ripple_corr", 0.5)), wear, int(w.get("rings", 1)),
                   float(spec.get("removal", {}).get("preston_exponent", 1.0)),
                   float(w.get("loading_max", 0.0)), float(w.get("loading_volume_mm3", 50.0)),
-                  float(w.get("loading_clean", 0.5)), float(pad.get("tilt_stiffness_Nmm_per_rad", 0.0)))
+                  float(w.get("loading_clean", 0.5)), float(pad.get("tilt_stiffness_Nmm_per_rad", 0.0)),
+                  float(w.get("loading_force_exponent", 0.0)))
     return world, ScanArtefacts(**spec.get("scan", {}))
 
 

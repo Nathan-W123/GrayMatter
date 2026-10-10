@@ -8,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from .config import Context, config_hash
-from .episode import make_truth, run_episode
+from .episode import loading_table, make_truth, run_episode
 
 _WORKER_CTX: Context | None = None
 
@@ -93,7 +93,8 @@ def run_task(ctx: Context, task: tuple) -> dict:
         return out
     out[(kind, world, default)], _ = run_episode(ctx, d, world, "alternating", default, experiment=kind, traj=traj,
                                                  risk=(kind == "robustness"), with_B=(kind == "robustness"),
-                                                 with_C2=bool(e.get("with_C2", False)))
+                                                 with_C2=bool(e.get("with_C2", False)),
+                                                 with_C3=bool(e.get("with_C3", False)))
     if kind != "robustness":
         return out
     if world == e.get("ablation_world", "matched") and d < int(e.get("ablation_draws", e["robustness_draws"])):
@@ -132,6 +133,8 @@ def run_draws(ctx: Context, verbose: bool = True, workers=1, tasks: list[tuple] 
     results do not depend on the number of worker processes."""
     global _WORKER_CTX
     tasks = task_list(ctx) if tasks is None else tasks
+    if ctx.cfg["experiments"].get("with_C3", False):
+        loading_table(ctx)     # build C3's tables once, before the workers fork
     workers = resolve_workers(workers)
     t0 = time.time()
     results: list[dict] = []

@@ -157,6 +157,9 @@ def _change_passes(rr: list[dict], threshold: float, margins: dict, cost_ratios,
         m = margins.get(f"r{c:g}", {})
         out[f"D_r{c:g}"] = _change_from_ratio(passes, d_ratio, threshold, m.get("D", 0.0))
         out[f"R_r{c:g}"] = _change_from_ratio(passes, r_ratio, threshold, m.get("R", 0.0))
+        if "cross_C3_median" in rr[0]:      # tracker C3: the same Bayes rule on its own crossing distribution
+            k3 = key.replace("cross_C_", "cross_C3_")
+            out[f"C3_r{c:g}"] = next((int(r["pass"]) + 1 for r in rr if r[k3] <= r["pass"] + 1), None)
     return out
 
 
@@ -181,8 +184,9 @@ def decision_rules(rows: list[dict], n_passes: int, threshold: float, margins: d
     forecast K/K0 of the next pass is below the threshold: D's MAP forecast, R the
     model-free extrapolation of the scanned means); for every cost ratio r,
     C_r (change when C's P(crossed by the next pass) >= 1 / (1 + r), the Bayes
-    decision for that cost; no tuning) and D_r, R_r (D and R with a safety
-    margin on the threshold tuned for that r on held-out draws, ``margins``).
+    decision for that cost; no tuning), C3_r (the same rule for tracker C3, when
+    it was run) and D_r, R_r (D and R with a safety margin on the threshold tuned
+    for that r on held-out draws, ``margins``).
     A rule that has not fired by the end of the run counts as changing at pass
     n_passes + 1; only draws with c <= n_passes + 1 are scored, and changes before
     pass n_passes + 1 on the other draws are counted as premature.
@@ -224,6 +228,12 @@ def decision_rules(rows: list[dict], n_passes: int, threshold: float, margins: d
             diff = cC - _cost(errs[other], c)
             entry[f"C_minus_{other}"] = {"mean": float(np.mean(diff)), "ci90": bootstrap_ci(diff, np.mean),
                                          "p_perm": paired_permutation_p(diff)}
+        if f"C3_{tag}" in errs:
+            c3 = _cost(errs[f"C3_{tag}"], c)
+            for other in (f"C_{tag}", f"D_{tag}", f"R_{tag}"):
+                diff = c3 - _cost(errs[other], c)
+                entry[f"C3_minus_{other}"] = {"mean": float(np.mean(diff)), "ci90": bootstrap_ci(diff, np.mean),
+                                              "p_perm": paired_permutation_p(diff)}
         costs = {k: out["rules"][k][f"cost_{tag}"] for k in out["rules"]}
         entry["lowest_cost_rule"] = min(costs, key=costs.get)
         out["by_cost_ratio"][tag] = entry
@@ -262,15 +272,19 @@ def tune_margins(rows: list[dict], n_passes: int, threshold: float, cost_ratios,
     return out
 
 
-def apply_holm(worlds: dict, family: str, key: str = "p_holm") -> int:
+def apply_holm(worlds: dict, family: str, key: str = "p_holm", tracker: str = "C") -> int:
     """Holm-adjust the paired-comparison p-values of every world's decision rules together
-    (one family: C_r against the tuned D_r and R_r for every cost ratio and world); the
-    adjusted value is stored next to each p-value as ``p_holm``. Returns the family size."""
+    (one family: ``tracker``'s rule against the tuned D_r and R_r, and for C3 also against C_r,
+    for every cost ratio and world); the adjusted value is stored next to each p-value as
+    ``key``. Returns the family size."""
     entries = {}
+    others = ("D", "R") if tracker == "C" else ("C", "D", "R")
     for w, s in worlds.items():
         for tag, e in s["decision_rules"]["by_cost_ratio"].items():
-            for other in (f"D_{tag}", f"R_{tag}"):
-                entries[(w, tag, other)] = e[f"C_minus_{other}"]
+            for o in others:
+                k = f"{tracker}_minus_{o}_{tag}"
+                if k in e:
+                    entries[(w, tag, o)] = e[k]
     adj = holm_adjust({k: v["p_perm"] for k, v in entries.items()})
     for k, v in entries.items():
         v[key] = adj[k]

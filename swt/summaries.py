@@ -1,4 +1,4 @@
-"""Per-draw and per-world summaries of episode rows (accuracy, calibration, C against D and C2)."""
+"""Per-draw and per-world summaries of episode rows (accuracy, calibration, C against D, C2 and C3)."""
 from __future__ import annotations
 
 import numpy as np
@@ -69,6 +69,12 @@ def final_draw_summary(rows: list[dict]) -> dict:
             "startup_rmse_C2_um": gmean([r["rmse_C2_um"] for r in later if r["pass"] < STEADY_FROM]),
             "steady_rmse_C2_um": gmean([r["rmse_C2_um"] for r in rows if r["pass"] >= STEADY_FROM])}
            if "rmse_C2_um" in last else {}),
+        **({"final_rmse_C3_um": last["rmse_C3_um"],
+            "startup_rmse_C3_um": gmean([r["rmse_C3_um"] for r in later if r["pass"] < STEADY_FROM]),
+            "steady_rmse_C3_um": gmean([r["rmse_C3_um"] for r in rows if r["pass"] >= STEADY_FROM]),
+            "final_C3_L_inf": last["C3_L_inf"], "final_C3_lam_ratio": last["C3_lam_median"] / last["true_lam"],
+            "final_C_lam_ratio": last["C_lam_median"] / last["true_lam"]}
+           if "rmse_C3_um" in last else {}),
         "n_passes_C_better_than_B": sum(r["rmse_C_um"] < r["rmse_B_um"] for r in rows),
         "n_passes_C_better_than_D": sum(r["rmse_C_um"] < r["rmse_D_um"] for r in rows),
         "predictive_inside_passes_2_on": int(sum(r["C_pred_mean_inside"] for r in later)),
@@ -129,6 +135,34 @@ def c2_summary(rows: list[dict], finals: list[dict]) -> dict | None:
     }
     out["final_level"] = iqr_summary([rr[-1]["C2_level"] for rr in by_draw(rows).values()])
     out["final_shape_rms"] = iqr_summary([rr[-1]["C2_shape_rms"] for rr in by_draw(rows).values()])
+    return out
+
+
+def c3_summary(rows: list[dict], finals: list[dict]) -> dict | None:
+    """Tracker C3 against C on the same draws: accuracy ratios (C/C3 > 1: C3 more accurate, medians
+    over draws with 90% bootstrap intervals and sign-flip p-values on the log ratio), the calibration
+    of C3's 90% intervals, its loading estimate and the wear rate of both against the truth."""
+    if not rows or "rmse_C3_um" not in rows[0]:
+        return None
+    later = [r for r in rows if r["pass"] >= 2]
+    out = {"final_rmse_um": iqr_summary([f["final_rmse_C3_um"] for f in finals])}
+    for label in ("startup", "steady", "final"):
+        ratio = np.array([f[f"{label}_rmse_C_um"] / f[f"{label}_rmse_C3_um"] for f in finals])
+        out[f"C_over_C3_{label}"] = {"median": float(np.median(ratio)), "ci90": bootstrap_ci(ratio),
+                                     "C3_better": int(np.sum(ratio > 1)), "n": int(ratio.size),
+                                     "p_perm": paired_permutation_p(np.log(ratio))}
+    inside_ = [r["C3_pred_mean_inside"] for r in later]
+    out["predictive_90"] = {
+        "passes_2_on": {"inside": int(sum(inside_)), "n": len(inside_), "fraction": float(np.mean(inside_)),
+                        "below": int(sum(r["true_mean_removal_um"] < r["C3_pred_mean_lo_um"] for r in later)),
+                        "above": int(sum(r["true_mean_removal_um"] > r["C3_pred_mean_hi_um"] for r in later))},
+        "passes_2_to_5": mean_or_none([r["C3_pred_mean_inside"] for r in later if r["pass"] <= 5]),
+        "passes_11_on": mean_or_none([r["C3_pred_mean_inside"] for r in later if r["pass"] >= 11]),
+        "regional_inside_fraction_passes_2_on": float(np.mean([r["C3_region_inside_fraction"] for r in later])),
+    }
+    out["final_L_inf"] = iqr_summary([f["final_C3_L_inf"] for f in finals])
+    out["final_lam_over_true"] = {"C3": iqr_summary([f["final_C3_lam_ratio"] for f in finals]),
+                                  "C": iqr_summary([f["final_C_lam_ratio"] for f in finals])}
     return out
 
 
@@ -256,4 +290,5 @@ def world_robustness(ctx: Context, rows: list[dict]) -> dict:
         "rejected_points_C": iqr_summary([f["median_rejected_points_C"] for f in finals]),
         "passes_redone_C": int(sum(f["passes_redone_C"] for f in finals)),
         **({"C2": c2} if (c2 := c2_summary(rows, finals)) is not None else {}),
+        **({"C3": c3} if (c3 := c3_summary(rows, finals)) is not None else {}),
     }, finals

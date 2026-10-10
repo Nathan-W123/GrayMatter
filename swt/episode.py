@@ -10,7 +10,8 @@ random streams in every world, so worlds are compared on paired draws.
 
 Random streams (seed, stream, draw): 1 truth parameters, 2 wear fluctuations,
 3 scans, 4 particle filter, 5 filter rollouts, 6 re-seeded filter (control),
-7 force-calibration gain, 8 force ripple, 9 model-description checks, 12 tracker C2.
+7 force-calibration gain, 8 force ripple, 9 model-description checks, 12 tracker C2,
+13 tracker C3, 14 its rollouts.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from .process import HiddenTruth, simulate_truth
 from .scan import Scanner
 from .stats import UM, rmse_um
 from .tracker2 import C2Config, DiscrepancyTracker
+from .tracker3 import C3Config, LoadingTable, LoadingTracker
 
 
 # --------------------------------------------------------------------------- hidden truth
@@ -68,6 +70,19 @@ def c2_config(cfg: dict) -> C2Config:
     return C2Config(**{k: (int(v) if k in ("draws", "learn_from_pass") else float(v)) for k, v in c.items()})
 
 
+def c3_config(cfg: dict) -> C3Config:
+    """Tracker C3's settings from the ``c3`` section of the config (defaults otherwise)."""
+    c = cfg.get("c3", {}) or {}
+    return C3Config(**{k: (tuple(float(x) for x in v) if k == "kappas" else float(v)) for k, v in c.items()})
+
+
+def loading_table(ctx: Context) -> LoadingTable:
+    """C3's surrogate tables, built once per context (before worker processes fork)."""
+    if "_loading_table" not in ctx.__dict__:
+        ctx.__dict__["_loading_table"] = LoadingTable(ctx.table, c3_config(ctx.cfg).kappas)
+    return ctx.__dict__["_loading_table"]
+
+
 def d_obs_sd(pf) -> float:
     """Noise of D's log K_i in its wear fit: C's prior median wear-fluctuation and transient levels."""
     gm = lambda r: float(np.sqrt(r[0] * r[1])) if r[0] > 0 else float(r[1]) / 2
@@ -80,7 +95,8 @@ def d_obs_sd(pf) -> float:
 def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: str = "alternating",
                 noise_um: float | None = None, experiment: str = "", record_maps: tuple[int, ...] = (),
                 traj=None, full: bool = True, pf_stream: int = 4, with_D: bool | None = None,
-                risk: bool = True, with_B: bool | None = None, with_C2: bool = False) -> tuple[list[dict], dict]:
+                risk: bool = True, with_B: bool | None = None, with_C2: bool = False,
+                with_C3: bool = False) -> tuple[list[dict], dict]:
     """Run all estimators through one sequence of passes on one hidden truth.
 
     Each pass: (1) every estimator predicts the removal map of the coming pass
@@ -96,7 +112,8 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
     ``with_D`` runs baseline D even when ``full`` is False (tuning of its decision margin);
     ``risk=False`` skips C's second crossing quantile (only the decision rules use it);
     ``with_B=False`` skips baseline B (not reported for the single-effect and stress worlds);
-    ``with_C2`` adds tracker C2 (C plus a discrepancy layer; C itself is unaffected).
+    ``with_C2`` adds tracker C2 (C plus a discrepancy layer; C itself is unaffected);
+    ``with_C3`` adds tracker C3 (C with an abrasive-loading state; a separate filter).
     """
     cfg = ctx.cfg
     seed = cfg["seed"]
@@ -122,12 +139,15 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
     region_index, region_tables = regions(ctx)
     C2 = DiscrepancyTracker(C, region_index, region_tables, ctx.obs_shape, c2_config(cfg),
                             rng_for(seed, 12, draw)) if with_C2 else None
+    C3 = LoadingTracker(loading_table(ctx), ctx.priors, ctx.pf, rng_for(seed, 13, draw),
+                        rollout_rng=rng_for(seed, 14, draw), obs_shape=ctx.obs_shape, c3=c3_config(cfg),
+                        region_index=region_index) if with_C3 else None
     rows, maps = [], {}
     nan = float("nan")
     for n, action in enumerate(schedule):
         if n > 0:
             prev = schedule[n - 1]
-            for est in (A, B, C, D):
+            for est in (A, B, C, D, C3):
                 if est is not None:
                     est.advance(prev)
         true_obs = traj.removal[n][oi]
@@ -142,6 +162,10 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
             preds["C2"] = C2.predict_map(preds["C"])
             c2_lo, _, c2_hi = C2.predict_mean_removal()
             c2_reg = C2.predict_region_removal()
+        if C3 is not None:
+            preds["C3"] = C3.predict(action)
+            c3_lo, _, c3_hi = C3.predict_mean_removal(action)
+            c3_reg = C3.predict_region_removal(action)
         reg_q = C.predict_region_removal(action, region_tables)
         reg_true = np.array([true_obs[ix].mean() for ix in region_index])
         reg_inside = float(np.mean((reg_q[:, 0] <= reg_true) & (reg_true <= reg_q[:, 2])))
@@ -154,6 +178,8 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
         C.update(scan, action, noise)
         if C2 is not None:
             C2.update(scan, noise)
+        if C3 is not None:
+            C3.update(scan, action, noise)
         s = C.summary()
         cr = (C.predict_crossing(n + 1, schedule, ctx.threshold) if full
               else {"median": nan, "lo": nan, "hi": nan, "band_mass": nan})
@@ -198,6 +224,23 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
                 "C2_region_inside_fraction": float(np.mean((c2_reg[:, 0] <= reg_true_c2)
                                                            & (reg_true_c2 <= c2_reg[:, 2]))),
                 **{f"C2_{k}": v for k, v in C2.summary().items()},
+            })
+        if C3 is not None:
+            s3 = C3.summary()
+            cr3 = C3.predict_crossing(n + 1, schedule, ctx.threshold)
+            row.update({
+                "rmse_C3_um": rmse_um(preds["C3"], true_obs),
+                "C3_pred_mean_lo_um": float(c3_lo) * UM, "C3_pred_mean_hi_um": float(c3_hi) * UM,
+                "C3_pred_mean_inside": bool(c3_lo <= true_mean <= c3_hi),
+                "C3_region_inside_fraction": float(np.mean((c3_reg[:, 0] <= reg_true) & (reg_true <= c3_reg[:, 2]))),
+                "C3_K0_median": s3["K0"]["median"], "C3_K_median": s3["K"]["median"],
+                "C3_lam_median": s3["lam"]["median"], "C3_k_pad_median": s3["k_pad"]["median"],
+                "C3_L_inf": s3["L_inf"]["median"], "C3_L_inf_lo": s3["L_inf"]["lo"], "C3_L_inf_hi": s3["L_inf"]["hi"],
+                "C3_clean": s3["clean"], "C3_kappa": s3["kappa"], "C3_load_start": s3["load_start"],
+                "C3_sigma_um": s3["sigma_um"], "C3_stages": s3["stages"],
+                "cross_C3_median": cr3["median"], "cross_C3_lo": cr3["lo"], "cross_C3_hi": cr3["hi"],
+                "cross_C3_risk": (C3.predict_crossing(n + 1, schedule, ctx.threshold, q=(q_risk, 1 - q_risk))["lo"]
+                                  if risk else nan),
             })
         rows.append(row)
         if n + 1 in record_maps:

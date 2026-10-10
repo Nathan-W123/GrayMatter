@@ -321,6 +321,8 @@ class World:
     loading_volume: float = 50.0        # removed volume [mm^3] over which loading builds up (e-folding)
     loading_clean: float = 0.5          # fraction of the loading shed between passes
     tilt_stiffness: float = 0.0         # > 0: pad holder tilts with this rotational stiffness [N mm/rad]
+    loading_force_exponent: float = 0.0 # loading limit scales as (F / loading_force_ref)^this (0: same at every force)
+    loading_force_ref: float = 30.0     # N
 
 
 MATCHED = World()
@@ -392,8 +394,10 @@ def simulate_truth(model: ProcessModel, truth: HiddenTruth, schedule: list[PassA
     cuts. A loading state L multiplies the effectiveness of each raster line by
     (1 - L); along a pass L grows towards ``loading_max`` with the removed volume
     (e-folding volume ``loading_volume``), and between passes a fraction
-    ``loading_clean`` of it is shed. Loading is temporary, so the reported K and
-    the abrasive-change threshold refer to the wear alone.
+    ``loading_clean`` of it is shed. With ``loading_force_exponent`` != 0 the limit
+    depends on the pass's actual force F: loading_max (F / loading_force_ref)^exponent.
+    Loading is temporary, so the reported K and the abrasive-change threshold refer
+    to the wear alone.
 
     Tilting holder (``world.tilt_stiffness`` > 0): the pad tilts against a rotational
     spring until the pressure moment balances it, which moves pressure towards an
@@ -449,6 +453,8 @@ def simulate_truth(model: ProcessModel, truth: HiddenTruth, schedule: list[PassA
         K_rl = ring_effectiveness(truth.K0, truth.lam, scale[:, None] * u, scale * V, fluct, world.wear)
         if world.loading_max > 0:     # loading builds up line by line with the removed volume
             Lm, VL = world.loading_max, world.loading_volume
+            if world.loading_force_exponent != 0.0:
+                Lm = Lm * (truth.force_gain * a.force / world.loading_force_ref) ** world.loading_force_exponent
             for li in range(K_rl.shape[1]):
                 K_rl[:, li] *= 1.0 - L
                 L = Lm - (Lm - L) * np.exp(-float(K_rl[:, li] @ u[:, li]) / VL)

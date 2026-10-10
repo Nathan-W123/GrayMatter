@@ -488,11 +488,13 @@ def fig_mismatch(res: Path, figdir: Path) -> None:
 # --------------------------------------------------------------------------- fig 8 (extended study)
 
 VIOLET = "#6a4fc1"    # C2 = C + discrepancy layer (extended study)
-EXT_ORDER = ("matched", "realistic", "realistic_b", "realistic_c", "realistic_d", "loading", "edge_tilt",
-             "radial_wear")
+EXT_ORDER = ("matched", "realistic", "realistic_b", "realistic_c", "realistic_d", "realistic_e", "loading",
+             "edge_tilt", "radial_wear")
 EXT_LABEL = {"matched": "matched", "realistic": "realistic", "realistic_b": "pre-reg. B",
-             "realistic_c": "pre-reg. C", "realistic_d": "pre-reg. D (new)", "loading": "stress: loading",
-             "edge_tilt": "stress: tilting holder", "radial_wear": "stress: ring-wise wear"}
+             "realistic_c": "pre-reg. C", "realistic_d": "pre-reg. D", "realistic_e": "pre-reg. E (new)",
+             "loading": "stress: loading", "edge_tilt": "stress: tilting holder",
+             "radial_wear": "stress: ring-wise wear"}
+TEAL = "#0f8a8a"      # C3 = C + abrasive-loading state (extended study)
 
 
 def _ext_worlds(res: Path) -> dict:
@@ -549,6 +551,53 @@ def fig_extended(res: Path, figdir: Path) -> None:
     _save(fig, figdir / "fig8_tracker_c2.png")
 
 
+# --------------------------------------------------------------------------- fig 9 (tracker C3)
+
+
+def fig_c3(res: Path, figdir: Path) -> None:
+    """Figure 9 (extended study): C3 against C and the tuned D on the abrasive-change decision
+    (cost per run at 1:1 and 19:1), and the wear rate each tracker ends with against the truth."""
+    ext = json.loads((res / "extended" / "summary.json").read_text())
+    ch = ext["abrasive_change"]["worlds"]
+    names = [w for w in EXT_ORDER if w in ch and "C3_r1" in ch[w]["decision_rules"]["rules"]]
+    x = np.arange(len(names))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.6))
+    for ax, r in zip(axes[:2], (1, 19)):
+        for off, rule, c, lab in ((-0.27, f"C_r{r}", BLUE, "C: joint tracker"),
+                                  (0.0, f"C3_r{r}", TEAL, "C3: C + loading state"),
+                                  (0.27, f"D_r{r}", GREEN, "D with tuned margin")):
+            v = [ch[w]["decision_rules"]["rules"][rule][f"cost_r{r}"] for w in names]
+            ax.bar(x + off, v, width=0.26, color=c, label=lab)
+        ax.set_xticks(x)
+        ax.set_xticklabels([EXT_LABEL[w] for w in names], rotation=35, ha="right")
+        ax.set_ylabel("mean cost per run (lower is better)")
+        ax.set_title(f"Abrasive change, late:early cost {r}:1")
+        ax.grid(axis="x", visible=False)
+    axes[0].legend(loc="upper left", fontsize=11, frameon=True, facecolor="white", edgecolor="none")
+    worlds = {**{w: v for w, v in ext["robustness"]["worlds"].items() if "C3" in v},
+              **{w: v for w, v in ext["stress_tests"]["worlds"].items() if "C3" in v}}
+    wn = [w for w in EXT_ORDER if w in worlds]
+    xx = np.arange(len(wn))
+    cx = axes[2]
+    for off, key, c, lab in ((-0.2, "C", BLUE, "C"), (0.2, "C3", TEAL, "C3")):
+        s = [worlds[w]["C3"]["final_lam_over_true"][key] for w in wn]
+        med = np.array([v["median"] for v in s])
+        cx.bar(xx + off, med, width=0.38, color=c, label=lab, log=True)
+        cx.errorbar(xx + off, med, yerr=[med - np.array([v["q25"] for v in s]), np.array([v["q75"] for v in s]) - med],
+                    fmt="none", ecolor=INK, capsize=3, lw=1.0)
+    cx.axhline(1.0, color=INK, lw=1.0, ls=":")
+    cx.set_xticks(xx)
+    cx.set_xticklabels([EXT_LABEL[w] for w in wn], rotation=35, ha="right")
+    cx.set_ylabel("wear rate at pass 20 / true wear rate\n(median, IQR)")
+    cx.set_title("Wear rate learned (1 = truth)")
+    cx.legend(loc="upper left", fontsize=11, frameon=True, facecolor="white", edgecolor="none")
+    cx.grid(axis="x", visible=False)
+    fig.suptitle("Extended study: what C3's loading state changes", x=0.01, ha="left", fontsize=15,
+                 fontweight="bold")
+    fig.tight_layout()
+    _save(fig, figdir / "fig9_tracker_c3.png")
+
+
 # --------------------------------------------------------------------------- drivers
 
 
@@ -577,8 +626,11 @@ def make_all(results: str | Path, figures: str | Path, ctx=None) -> None:
 
 
 def make_extended(results: str | Path, figures: str | Path) -> None:
-    """Figure 8, from ``results/extended`` and the core results."""
+    """Figures 8 and 9, from ``results/extended`` and the core results."""
     res, figdir = Path(results), Path(figures)
     figdir.mkdir(parents=True, exist_ok=True)
     _style()
     fig_extended(res, figdir)
+    ext = json.loads((res / "extended" / "summary.json").read_text())
+    if any("C3" in v for v in ext["robustness"]["worlds"].values()):
+        fig_c3(res, figdir)

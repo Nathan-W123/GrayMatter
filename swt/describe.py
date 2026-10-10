@@ -212,10 +212,12 @@ def _world_info(ctx: Context, cg: ContactGeometry, forces: list[float], nom: dic
             truth = HiddenTruth(nom["k_pad"], nom["K0"], nom["lam"])
             base = World("b", wear=w.wear, wear_rings=w.wear_rings)
             load = World("l", wear=w.wear, wear_rings=w.wear_rings, loading_max=w.loading_max,
-                         loading_volume=w.loading_volume, loading_clean=w.loading_clean)
+                         loading_volume=w.loading_volume, loading_clean=w.loading_clean,
+                         loading_force_exponent=w.loading_force_exponent)
             v0 = simulate_truth(ctx.model, truth, sched, 0.0, rng_for(0, 0), max_extend=0, world=base).volume
             v1 = simulate_truth(ctx.model, truth, sched, 0.0, rng_for(0, 0), max_extend=0, world=load).volume
             d["loading"] = {"max": w.loading_max, "volume_mm3": w.loading_volume, "clean": w.loading_clean,
+                            "force_exponent": w.loading_force_exponent,
                             "volume_loss_nominal": {"pass_1": float(1 - v1[0] / v0[0]),
                                                     "last_pass": float(1 - v1[-1] / v0[-1])}}
         if w.tilt_stiffness > 0:

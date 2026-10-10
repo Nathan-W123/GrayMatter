@@ -24,7 +24,7 @@ from .describe import experiment_contact_sweep, experiment_model_info
 from .episode import draw_truth, run_episode
 from .runner import breakdown_extra_worlds, resolve_workers, robust_worlds, run_draws, source_hash, task_list
 from .stats import UM, iqr_summary, write_csv, write_json
-from .summaries import (ESTS, PARAMS, by_draw, c2_summary, final_draw_summary, inside, outside_distance,
+from .summaries import (ESTS, PARAMS, by_draw, c2_summary, c3_summary, final_draw_summary, inside, outside_distance,
                         parameter_coverage, predictive_calibration, rel_width, world_robustness)
 from .tuning import experiment_tuning, tuned_rate_drift
 
@@ -390,6 +390,7 @@ def experiment_breakdown(ctx: Context, out: Path, runs: dict, verbose: bool = Tr
             "noise_level_C_um": iqr_summary([f["median_sigma_C_um"] for f in finals]),
             "rejected_points_C": iqr_summary([f["median_rejected_points_C"] for f in finals]),
             **({"C2": c2} if (c2 := c2_summary(rows, finals)) is not None else {}),
+            **({"C3": c3} if (c3 := c3_summary(rows, finals)) is not None else {}),
         }
         summary["worlds"][w] = s
         table.append({
@@ -461,13 +462,17 @@ def run_all(ctx: Context, out_dir: str | Path = "results", verbose: bool = True,
 
 def extended_context(ctx: Context) -> Context:
     """The context of the extended study: the pre-registered worlds at ``extended.draws`` draws and
-    the stress tests at ``extended.stress_draws``, nothing else; same tuned drift and margins."""
+    the stress tests at ``extended.stress_draws``, nothing else; same tuned drift and margins. With
+    ``extended.with_C3``, tracker C3 runs everywhere and the core worlds ``extended.repeat_core_worlds``
+    are run again (same draws, so C's results there equal the core run's) to compare C3 with C."""
     import copy
     import dataclasses
     ext = ctx.cfg["extended"]
     cfg = copy.deepcopy(ctx.cfg)
     e = cfg["experiments"]
-    e.update({"robustness_worlds": list(ext["worlds"]), "robustness_draws": int(ext["draws"]),
+    repeat = list(ext.get("repeat_core_worlds", [])) if ext.get("with_C3", False) else []
+    e.update({"robustness_worlds": repeat + list(ext["worlds"]), "robustness_draws": int(ext["draws"]),
+              "with_C3": bool(ext.get("with_C3", False)),
               "validation_worlds": [], "breakdown_worlds": list(ext.get("stress_worlds", [])),
               "breakdown_draws": int(ext.get("stress_draws", 0)), "ablation_draws": 0, "noise_draws": 0})
     out = dataclasses.replace(ctx, cfg=cfg)
@@ -477,9 +482,11 @@ def extended_context(ctx: Context) -> Context:
 
 def run_extended(ctx: Context, out_dir: str | Path = "results/extended", core_dir: str | Path = "results",
                  verbose: bool = True, workers=1) -> dict:
-    """The extended study (``run-all --extended``): tracker C2 against C, D and R in the pre-registered
-    worlds at 100 draws, the stress tests, and Holm-adjusted decision comparisons over the core and
-    extended worlds together. Needs the tuned drift and margins of the core run (in ``ctx``)."""
+    """The extended study (``run-all --extended``): trackers C2 and C3 against C, D and R in the
+    pre-registered worlds at 100 draws (C3 also in the repeated core worlds), the stress tests, and
+    Holm-adjusted decision comparisons: C against D and R over the core and extended worlds together
+    (each world once), and C3 against C, D and R over the extended worlds. Needs the tuned drift and
+    margins of the core run (in ``ctx``)."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
@@ -494,9 +501,12 @@ def run_extended(ctx: Context, out_dir: str | Path = "results/extended", core_di
     stress = experiment_breakdown(ectx, out, runs, verbose)
     core = json.loads((Path(core_dir) / "abrasive_change.json").read_text())
     every = {**{f"core:{w}": v for w, v in core["worlds"].items()},
-             **{f"extended:{w}": v for w, v in change["worlds"].items()}}
+             **{f"extended:{w}": v for w, v in change["worlds"].items() if w not in core["worlds"]}}
     n_all = apply_holm(every, "core and extended worlds", key="p_holm_all")
     change["holm_all_family_size"] = n_all
+    if ectx.cfg["experiments"].get("with_C3", False):
+        change["holm_C3_family_size"] = apply_holm(change["worlds"], "C3 in the extended worlds", key="p_holm_C3",
+                                                   tracker="C3")
     write_json(out / "abrasive_change.json", change)
     summary = {"robustness": robust, "abrasive_change": change, "stress_tests": stress,
                "core_decision_p_holm_all": {w: v["decision_rules"]["by_cost_ratio"] for w, v in core["worlds"].items()}}
