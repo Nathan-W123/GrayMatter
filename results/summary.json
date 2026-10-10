@@ -309,6 +309,7 @@
           "max": 0.15,
           "volume_mm3": 50.0,
           "clean": 0.5,
+          "force_exponent": 0.0,
           "volume_loss_nominal": {
             "pass_1": 0.10945164744804459,
             "last_pass": 0.04720842481439336
@@ -556,6 +557,7 @@
           "max": 0.2,
           "volume_mm3": 50.0,
           "clean": 0.3,
+          "force_exponent": 0.0,
           "volume_loss_nominal": {
             "pass_1": 0.13984378463688762,
             "last_pass": 0.0868677726836159
@@ -577,6 +579,105 @@
               "max_tilt_deg": 0.2166958537758556,
               "map_change_rel_rms": 0.6282380929807674
             }
+          }
+        }
+      },
+      "realistic_e": {
+        "pad_law": "foam",
+        "force_gain_sigma_log": 0.05,
+        "force_ripple": 0.03,
+        "ripple_corr": 0.5,
+        "wear_law": "two_stage",
+        "wear_rings": 2,
+        "preston_exponent": 0.75,
+        "scan_artefacts": {
+          "registration_sigma_mm": 0.3,
+          "profile_bias_um": 0.5,
+          "outlier_fraction": 0.005,
+          "outlier_um": 15.0,
+          "dropout_fraction": 0.02,
+          "dropout_gap_points": 8,
+          "texture_um": 1.0,
+          "texture_corr_mm": 1.0
+        },
+        "foam": {
+          "thickness_mm": 12.0,
+          "at_max_force": {
+            "soft_k_low": {
+              "k_pad": 0.00063,
+              "force_N": 40.0,
+              "max_strain_foam": 0.4139289917449866,
+              "peak_pressure_ratio_foam_over_linear": 1.2449618914714686,
+              "contact_fraction_linear": 1.0,
+              "contact_fraction_foam": 0.9462584480091197
+            },
+            "mid": {
+              "k_pad": 0.05612486080160912,
+              "force_N": 40.0,
+              "max_strain_foam": 0.02573389048306642,
+              "peak_pressure_ratio_foam_over_linear": 1.012026907224914,
+              "contact_fraction_linear": 0.2728605162446055,
+              "contact_fraction_foam": 0.2728605162446055
+            },
+            "stiff_k_high": {
+              "k_pad": 5.0,
+              "force_N": 40.0,
+              "max_strain_foam": 0.0013166594439534762,
+              "peak_pressure_ratio_foam_over_linear": 1.0007014963546323,
+              "contact_fraction_linear": 0.07124826968487909,
+              "contact_fraction_foam": 0.07124826968487909
+            }
+          }
+        },
+        "two_stage": {
+          "fast_fraction": 0.35,
+          "fast_ratio": 5.0,
+          "volume_to_half_K0_mm3": {
+            "single": 2772.588722239782,
+            "two_stage": 1502.3077148577984
+          },
+          "nominal_first_pass_volume_mm3": 243.7455126727809,
+          "K_over_K0_after_first_pass": {
+            "single": 0.940883098578072,
+            "two_stage": 0.8696492781616627
+          }
+        },
+        "preston": {
+          "exponent": 0.75,
+          "p_ref_kPa": 10.0,
+          "force_N": 30.0,
+          "volume_ratio_vs_linear": {
+            "soft_k_low": 1.261205707351536,
+            "mid": 0.9288379787332235,
+            "stiff_k_high": 0.6372962407065441
+          },
+          "soft_over_stiff_volume_ratio": 1.9789944248741984
+        },
+        "radial_wear": {
+          "rings": 2,
+          "K_over_K0_at_last_pass_nominal": {
+            "soft_k_low": {
+              "rings": 0.29204874162973365,
+              "uniform": 0.293537290274457
+            },
+            "mid": {
+              "rings": 0.2762769719321006,
+              "uniform": 0.2961120680163454
+            },
+            "stiff_k_high": {
+              "rings": 0.27450813816351344,
+              "uniform": 0.2962936295651781
+            }
+          }
+        },
+        "loading": {
+          "max": 0.3,
+          "volume_mm3": 150.0,
+          "clean": 0.6,
+          "force_exponent": 0.5,
+          "volume_loss_nominal": {
+            "pass_1": 0.10408616681069915,
+            "last_pass": 0.05853074494564203
           }
         }
       },
@@ -913,7 +1014,7 @@
         "R_held_out_cost_no_margin": 13.0
       }
     },
-    "config_hash": "e99f3e495c90"
+    "config_hash": "d0511fd8f4ef"
   },
   "main_run": {
     "draw": 15,

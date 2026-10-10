@@ -2,10 +2,10 @@
   "swt_version": "0.1.0",
   "python": "3.11.15",
   "numpy": "2.4.6",
-  "config_hash": "b9e99788e206",
-  "source_hash": "03d9f771edf7",
-  "experiment_seconds": 484.9,
-  "context_build_seconds": 9.4,
+  "config_hash": "ff5747178230",
+  "source_hash": "c5e75eb96f22",
+  "experiment_seconds": 506.8,
+  "context_build_seconds": 10.6,
   "workers": 4,
   "cpu_count": 4,
   "episodes": 372,
@@ -60,6 +60,16 @@
       "shape_memory": 0.8,
       "memory": 0.8,
       "draws": 4
+    },
+    "c3": {
+      "kappas": [
+        1.5,
+        3.0,
+        6.0
+      ],
+      "load_max": 0.5,
+      "clean_min": 0.4,
+      "p_loading": 0.5
     },
     "abrasive": {
       "threshold_fraction": 0.5,
@@ -234,6 +244,40 @@
           "texture_um": 1.0,
           "texture_corr_mm": 1.0
         }
+      },
+      "realistic_e": {
+        "pad": {
+          "kind": "foam",
+          "thickness_mm": 12.0
+        },
+        "removal": {
+          "preston_exponent": 0.75
+        },
+        "force": {
+          "gain_sigma_log": 0.05,
+          "ripple": 0.03,
+          "ripple_corr": 0.5
+        },
+        "wear": {
+          "kind": "two_stage",
+          "fast_fraction": 0.35,
+          "fast_ratio": 5.0,
+          "rings": 2,
+          "loading_max": 0.3,
+          "loading_volume_mm3": 150.0,
+          "loading_clean": 0.6,
+          "loading_force_exponent": 0.5
+        },
+        "scan": {
+          "registration_sigma_mm": 0.3,
+          "profile_bias_um": 0.5,
+          "outlier_fraction": 0.005,
+          "outlier_um": 15.0,
+          "dropout_fraction": 0.02,
+          "dropout_gap_points": 8,
+          "texture_um": 1.0,
+          "texture_corr_mm": 1.0
+        }
       }
     },
     "experiments": {
@@ -273,7 +317,8 @@
       "worlds": [
         "realistic_b",
         "realistic_c",
-        "realistic_d"
+        "realistic_d",
+        "realistic_e"
       ],
       "draws": 100,
       "stress_worlds": [
@@ -281,7 +326,12 @@
         "edge_tilt",
         "radial_wear"
       ],
-      "stress_draws": 30
+      "stress_draws": 30,
+      "with_C3": true,
+      "repeat_core_worlds": [
+        "matched",
+        "realistic"
+      ]
     },
     "tuning": {
       "draws": [
