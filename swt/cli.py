@@ -104,8 +104,8 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--full", action="store_true",
                         help="larger single-effect, stress, noise, ablation and tuning experiments (slower)")
         sp.add_argument("--extended", action="store_true",
-                        help="run-all only: also the extended study (tracker C2, pre-registered worlds at "
-                             "100 draws, stress tests; about 10-12 more minutes)")
+                        help="run-all only: also the extended study (trackers C2 and C3, pre-registered worlds "
+                             "at 100 draws, stress tests; several times longer than the core run)")
         sp.set_defaults(func=fn)
     args = p.parse_args(argv)
     return args.func(args)
