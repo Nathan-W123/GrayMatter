@@ -458,6 +458,93 @@
         }
       }
     },
+    "realistic_d": {
+      "pad_law": "linear",
+      "force_gain_sigma_log": 0.04,
+      "force_ripple": 0.03,
+      "ripple_corr": 0.5,
+      "wear_law": "two_stage",
+      "wear_rings": 2,
+      "preston_exponent": 0.65,
+      "scan_artefacts": {
+        "registration_sigma_mm": 0.3,
+        "profile_bias_um": 0.5,
+        "outlier_fraction": 0.005,
+        "outlier_um": 15.0,
+        "dropout_fraction": 0.02,
+        "dropout_gap_points": 8,
+        "texture_um": 1.0,
+        "texture_corr_mm": 1.0
+      },
+      "two_stage": {
+        "fast_fraction": 0.45,
+        "fast_ratio": 8.0,
+        "volume_to_half_K0_mm3": {
+          "single": 2772.588722239782,
+          "two_stage": 954.2661369171947
+        },
+        "nominal_first_pass_volume_mm3": 243.7455126727809,
+        "K_over_K0_after_first_pass": {
+          "single": 0.940883098578072,
+          "two_stage": 0.7938601288724483
+        }
+      },
+      "preston": {
+        "exponent": 0.65,
+        "p_ref_kPa": 10.0,
+        "force_N": 30.0,
+        "volume_ratio_vs_linear": {
+          "soft_k_low": 1.3882599517836582,
+          "mid": 0.9058515083093582,
+          "stiff_k_high": 0.5341934509412286
+        },
+        "soft_over_stiff_volume_ratio": 2.5987962775238014
+      },
+      "radial_wear": {
+        "rings": 2,
+        "K_over_K0_at_last_pass_nominal": {
+          "soft_k_low": {
+            "rings": 0.26752657765908816,
+            "uniform": 0.2691814866005701
+          },
+          "mid": {
+            "rings": 0.2515755411093942,
+            "uniform": 0.27125592624279543
+          },
+          "stiff_k_high": {
+            "rings": 0.24986401009226258,
+            "uniform": 0.2714020004809797
+          }
+        }
+      },
+      "loading": {
+        "max": 0.2,
+        "volume_mm3": 50.0,
+        "clean": 0.3,
+        "volume_loss_nominal": {
+          "pass_1": 0.13984378463688762,
+          "last_pass": 0.0868677726836159
+        }
+      },
+      "tilt": {
+        "stiffness_Nmm_per_rad": 100000.0,
+        "force_N": 40.0,
+        "at_max_force": {
+          "soft_k_low": {
+            "max_tilt_deg": 0.8434415991011934,
+            "map_change_rel_rms": 0.010328273666077123
+          },
+          "mid": {
+            "max_tilt_deg": 0.6050229050072843,
+            "map_change_rel_rms": 0.18690023832643313
+          },
+          "stiff_k_high": {
+            "max_tilt_deg": 0.2166958537758556,
+            "map_change_rel_rms": 0.6282380929807674
+          }
+        }
+      }
+    },
     "only_pad": {
       "pad_law": "foam",
       "force_gain_sigma_log": 0.0,

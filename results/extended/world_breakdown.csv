@@ -1,0 +1,4 @@
+world,n_draws,final_rmse_A_um,final_rmse_C_um,final_rmse_oracle_um,C_over_oracle,predictive_coverage,coverage_k_pad,coverage_lam,coverage_K,crossing_mean_abs_err_last,crossing_band_coverage_last,sigma_C_um
+loading,30,2.27886,0.359421,0.0481673,7.01491,0.549123,0.3,0,0,1.65385,0.269231,2
+edge_tilt,30,3.39937,2.32759,0.0539364,43.5177,0.357895,0,1,0.133333,0.25,0.964286,2.50004
+radial_wear,30,2.33637,0.544664,0.0477841,12.1018,0.894737,0,1,0.666667,0.366667,1,2

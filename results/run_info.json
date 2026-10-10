@@ -2,13 +2,13 @@
   "swt_version": "0.1.0",
   "python": "3.11.15",
   "numpy": "2.4.6",
-  "config_hash": "c5f71476f734",
-  "source_hash": "288a742e2309",
-  "experiment_seconds": 532.0,
-  "context_build_seconds": 8.8,
+  "config_hash": "b9e99788e206",
+  "source_hash": "03d9f771edf7",
+  "experiment_seconds": 484.9,
+  "context_build_seconds": 9.4,
   "workers": 4,
   "cpu_count": 4,
-  "episodes": 452,
+  "episodes": 372,
   "config": {
     "seed": 2026,
     "geometry": {
@@ -54,6 +54,12 @@
       "lam_median": 0.00025,
       "lam_sigma_log": 0.35,
       "wear_sigma_log": 0.01
+    },
+    "c2": {
+      "level_memory": 0.8,
+      "shape_memory": 0.8,
+      "memory": 0.8,
+      "draws": 4
     },
     "abrasive": {
       "threshold_fraction": 0.5,
@@ -195,6 +201,39 @@
           "texture_um": 0.8,
           "texture_corr_mm": 1.0
         }
+      },
+      "realistic_d": {
+        "pad": {
+          "kind": "linear",
+          "tilt_stiffness_Nmm_per_rad": "1.0e5"
+        },
+        "removal": {
+          "preston_exponent": 0.65
+        },
+        "force": {
+          "gain_sigma_log": 0.04,
+          "ripple": 0.03,
+          "ripple_corr": 0.5
+        },
+        "wear": {
+          "kind": "two_stage",
+          "fast_fraction": 0.45,
+          "fast_ratio": 8.0,
+          "rings": 2,
+          "loading_max": 0.2,
+          "loading_volume_mm3": 50.0,
+          "loading_clean": 0.3
+        },
+        "scan": {
+          "registration_sigma_mm": 0.3,
+          "profile_bias_um": 0.5,
+          "outlier_fraction": 0.005,
+          "outlier_um": 15.0,
+          "dropout_fraction": 0.02,
+          "dropout_gap_points": 8,
+          "texture_um": 1.0,
+          "texture_corr_mm": 1.0
+        }
       }
     },
     "experiments": {
@@ -206,10 +245,8 @@
         "matched",
         "realistic"
       ],
-      "validation_worlds": [
-        "realistic_b",
-        "realistic_c"
-      ],
+      "validation_worlds": [],
+      "with_C2": true,
       "validation_draws": 40,
       "ablation_world": "matched",
       "noise_world": "realistic",
@@ -231,6 +268,20 @@
         30.0,
         121
       ]
+    },
+    "extended": {
+      "worlds": [
+        "realistic_b",
+        "realistic_c",
+        "realistic_d"
+      ],
+      "draws": 100,
+      "stress_worlds": [
+        "loading",
+        "edge_tilt",
+        "radial_wear"
+      ],
+      "stress_draws": 30
     },
     "tuning": {
       "draws": [
