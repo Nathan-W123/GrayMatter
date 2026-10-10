@@ -237,6 +237,7 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
                 "C3_lam_median": s3["lam"]["median"], "C3_k_pad_median": s3["k_pad"]["median"],
                 "C3_L_inf": s3["L_inf"]["median"], "C3_L_inf_lo": s3["L_inf"]["lo"], "C3_L_inf_hi": s3["L_inf"]["hi"],
                 "C3_clean": s3["clean"], "C3_kappa": s3["kappa"], "C3_load_start": s3["load_start"],
+                "C3_p_loading": s3["p_loading"],
                 "C3_sigma_um": s3["sigma_um"], "C3_stages": s3["stages"],
                 "cross_C3_median": cr3["median"], "cross_C3_lo": cr3["lo"], "cross_C3_hi": cr3["hi"],
                 "cross_C3_risk": (C3.predict_crossing(n + 1, schedule, ctx.threshold, q=(q_risk, 1 - q_risk))["lo"]

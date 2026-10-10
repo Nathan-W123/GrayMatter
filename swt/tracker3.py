@@ -47,6 +47,7 @@ class C3Config:
     kappas: tuple[float, ...] = (1.5, 5.0, 15.0)   # loading e-folds per pass (uniform prior over these)
     load_max: float = 0.5                          # L_inf ~ uniform on [0, load_max]
     clean_min: float = 0.2                         # c ~ uniform on [clean_min, 1]: loading is temporary
+    p_loading: float = 1.0                         # prior probability that the abrasive loads at all
 
 
 def _gram(A: np.ndarray, B: np.ndarray) -> np.ndarray:
@@ -268,18 +269,24 @@ class LoadingTracker(ParticleFilter):
         n = cfg.n_particles
         self.c3 = c3
         self.kap = table.kappas
-        self.Linf = rng.uniform(0.0, c3.load_max, n)
+        self.Linf = rng.uniform(0.0, c3.load_max, n)        # loading limit if the abrasive loads
         self.clean = rng.uniform(c3.clean_min, 1.0, n)
         self.kidx = rng.integers(0, table.n_k, n)
         self.region_index = region_index
-        self.rw_scale.update({"load": 1.0, "kappa": 1.0})
+        self.on = (rng.random(n) < c3.p_loading) if c3.p_loading < 1.0 else np.ones(n, dtype=bool)
+        self.rw_scale.update({"load": 1.0, "kappa": 1.0, "toggle": 1.0})
         # passes after which r^i < 1e-12 (r = (1 - c) exp(-kappa) <= its largest value): the start
         # loading has reached its steady state to that precision
         r_max = (1.0 - c3.clean_min) * float(np.exp(-self.kap.min()))
         self._n_transient = int(np.ceil(np.log(1e-12) / np.log(max(r_max, 1e-300)))) + 1 if r_max > 0 else 1
-        self.S, self.Lbar = self._paths(self.Linf, self.clean, self.kidx)
+        self.S, self.Lbar = self._paths(self.Leff, self.clean, self.kidx)
 
     # ------------------------------------------------------------------ loading model
+    @property
+    def Leff(self) -> np.ndarray:
+        """The loading limit in effect: L_inf if the particle's abrasive loads, else 0."""
+        return np.where(self.on, self.Linf, 0.0)
+
     def _paths(self, Linf, clean, kidx) -> tuple[np.ndarray, np.ndarray]:
         """Loading at the start of every pass (S) and its volume-weighted mean over the pass (Lbar)."""
         kap = self.kap[kidx]
@@ -301,7 +308,7 @@ class LoadingTracker(ParticleFilter):
         return M[:, p.reshape(-1)].reshape((M.shape[0],) + p.shape[1:])
 
     def _load(self, load):
-        return (self.Linf, self.S, self.Lbar, self.kidx) if load is None else load
+        return (self.Leff, self.S, self.Lbar, self.kidx) if load is None else load
 
     def _loglik(self, p: int, lk, llam, lK, beta=None, g=None, load=None) -> np.ndarray:
         g = self.gpath[:, p] if g is None else g
@@ -338,8 +345,7 @@ class LoadingTracker(ParticleFilter):
         return val + self.TR[:, :j].sum(axis=1) if j else val
 
     def _accept(self, acc, j, path, load, LLp, TRp) -> None:
-        Linf, S, Lb, kidx = load
-        self.Linf = np.where(acc, Linf, self.Linf)
+        _, S, Lb, kidx = load
         self.kidx = np.where(acc, kidx, self.kidx)
         self.S[acc], self.Lbar[acc] = S[acc], Lb[acc]
         self.path[acc, :j + 1] = path[acc]
@@ -362,12 +368,31 @@ class LoadingTracker(ParticleFilter):
         step = self.rng.standard_normal((n, 2)) @ L.T
         Linf_p = self._reflect(self.Linf + step[:, 0], 0.0, self.c3.load_max)
         clean_p = self._reflect(self.clean + step[:, 1], self.c3.clean_min, 1.0)
-        path_p = self.path[:, :j + 1] + (np.log1p(-self.Linf) - np.log1p(-Linf_p))[:, None]
-        S_p, Lb_p = self._paths(Linf_p, clean_p, self.kidx)
-        load = (Linf_p, S_p, Lb_p, self.kidx)
+        Leff_p = np.where(self.on, Linf_p, 0.0)
+        path_p = self.path[:, :j + 1] + (np.log1p(-self.Leff) - np.log1p(-Leff_p))[:, None]
+        S_p, Lb_p = self._paths(Leff_p, clean_p, self.kidx)
+        load = (Leff_p, S_p, Lb_p, self.kidx)
         new, LLp, TRp = self._rescore(j, tempers, path_p, load)
         acc = self._mh("load", new - self._current_score(j, tempers))
+        self.Linf = np.where(acc, Linf_p, self.Linf)
         self.clean = np.where(acc, clean_p, self.clean)
+        self._accept(acc, j, path_p, load, LLp, TRp)
+
+    def _move_toggle(self, j: int, tempers) -> None:
+        """Switch loading off or on (keeping L_inf, c and kappa, which have their priors either way), with
+        the same shift of the log K path as in _move_load; the prior odds enter the acceptance ratio."""
+        pl = self.c3.p_loading
+        if not 0.0 < pl < 1.0:
+            return
+        on_p = ~self.on
+        Leff_p = np.where(on_p, self.Linf, 0.0)
+        path_p = self.path[:, :j + 1] + (np.log1p(-self.Leff) - np.log1p(-Leff_p))[:, None]
+        S_p, Lb_p = self._paths(Leff_p, self.clean, self.kidx)
+        load = (Leff_p, S_p, Lb_p, self.kidx)
+        new, LLp, TRp = self._rescore(j, tempers, path_p, load)
+        odds = np.log(pl / (1.0 - pl))
+        acc = self._mh("toggle", new - self._current_score(j, tempers) + np.where(on_p, odds, -odds))
+        self.on = np.where(acc, on_p, self.on)
         self._accept(acc, j, path_p, load, LLp, TRp)
 
     def _move_kappa(self, j: int, tempers) -> None:
@@ -376,8 +401,8 @@ class LoadingTracker(ParticleFilter):
             return
         n = self.lk.size
         prop = (self.kidx + self.rng.integers(1, self.table.n_k, n)) % self.table.n_k
-        S_p, Lb_p = self._paths(self.Linf, self.clean, prop)
-        load = (self.Linf, S_p, Lb_p, prop)
+        S_p, Lb_p = self._paths(self.Leff, self.clean, prop)
+        load = (self.Leff, S_p, Lb_p, prop)
         path = self.path[:, :j + 1]
         new, LLp, TRp = self._rescore(j, tempers, path, load)
         acc = self._mh("kappa", new - self._current_score(j, tempers))
@@ -389,11 +414,12 @@ class LoadingTracker(ParticleFilter):
         tempers = np.ones(j + 1)
         tempers[j] = phi
         self._move_load(j, tempers)
+        self._move_toggle(j, tempers)
         if full:
             self._move_kappa(j, tempers)
 
     def _adapt(self, key: str, rate: float) -> None:
-        if key != "kappa":     # a discrete jump has no scale to adapt
+        if key not in ("kappa", "toggle"):     # discrete jumps have no scale to adapt
             super()._adapt(key, rate)
 
     def _resample(self) -> None:
@@ -401,16 +427,16 @@ class LoadingTracker(ParticleFilter):
         self.lk, self.lsw, self.beta, self.lsg = self.lk[idx], self.lsw[idx], self.beta[idx], self.lsg[idx]
         self.gpath, self.GP = self.gpath[idx], self.GP[idx]
         self.path, self.lpath, self.LL, self.TR = self.path[idx], self.lpath[idx], self.LL[idx], self.TR[idx]
-        self.Linf, self.clean, self.kidx = self.Linf[idx], self.clean[idx], self.kidx[idx]
+        self.Linf, self.clean, self.kidx, self.on = self.Linf[idx], self.clean[idx], self.kidx[idx], self.on[idx]
         self.S, self.Lbar = self.S[idx], self.Lbar[idx]
         self.w = np.full(self.lk.size, 1.0 / self.lk.size)
 
     def _snapshot(self):
-        return (super()._snapshot(), self.Linf.copy(), self.clean.copy(), self.kidx.copy(), self.S.copy(),
-                self.Lbar.copy())
+        return (super()._snapshot(), self.Linf.copy(), self.clean.copy(), self.kidx.copy(), self.on.copy(),
+                self.S.copy(), self.Lbar.copy())
 
     def _restore(self, snap) -> None:
-        base, self.Linf, self.clean, self.kidx, self.S, self.Lbar = snap
+        base, self.Linf, self.clean, self.kidx, self.on, self.S, self.Lbar = snap
         super()._restore(base)
 
     # ------------------------------------------------------------------ predictions
@@ -418,7 +444,8 @@ class LoadingTracker(ParticleFilter):
         j = self._current()
         eta, a, z = self._coeffs(self.lk, self.lpath[:, j], self.path[:, j], action.force, self._scale(action),
                                  g=self.gpath[:, j])
-        return eta, a * (1.0 - self.Linf), a * (self.Linf - self.S[:, j]), z * (1.0 - self.Lbar[:, j])
+        L = self.Leff
+        return eta, a * (1.0 - L), a * (L - self.S[:, j]), z * (1.0 - self.Lbar[:, j])
 
     def predict(self, action: PassAction) -> np.ndarray:
         eta, A, B, z = self._next(action)
@@ -476,8 +503,10 @@ class LoadingTracker(ParticleFilter):
         out = super().summary(q)
         j = self._current()
         w = self.w
-        lo, med, hi = weighted_quantiles(self.Linf, w, [q[0], 0.5, q[1]])
-        out["L_inf"] = {"median": float(med), "lo": float(lo), "hi": float(hi), "mean": float(w @ self.Linf)}
+        L = self.Leff
+        lo, med, hi = weighted_quantiles(L, w, [q[0], 0.5, q[1]])
+        out["L_inf"] = {"median": float(med), "lo": float(lo), "hi": float(hi), "mean": float(w @ L)}
+        out["p_loading"] = float(w @ self.on)
         out["clean"] = float(weighted_quantiles(self.clean, w, [0.5])[0])
         out["kappa"] = float(weighted_quantiles(self.kap[self.kidx], w, [0.5])[0])
         out["load_start"] = float(w @ self.S[:, j])
