@@ -494,7 +494,7 @@ EXT_LABEL = {"matched": "matched", "realistic": "realistic", "realistic_b": "pre
              "realistic_c": "pre-reg. C", "realistic_d": "pre-reg. D", "realistic_e": "pre-reg. E (new)",
              "loading": "stress: loading", "edge_tilt": "stress: tilting holder",
              "radial_wear": "stress: ring-wise wear"}
-TEAL = "#0f8a8a"      # C3 = C + abrasive-loading state (extended study)
+MAGENTA = "#b8336a"   # C3 = C + abrasive-loading state (extended study); distinct from D's green
 
 
 def _ext_worlds(res: Path) -> dict:
@@ -562,9 +562,11 @@ def fig_c3(res: Path, figdir: Path) -> None:
     names = [w for w in EXT_ORDER if w in ch and "C3_r1" in ch[w]["decision_rules"]["rules"]]
     x = np.arange(len(names))
     fig, axes = plt.subplots(1, 3, figsize=(18, 5.6))
+    for ax in axes:
+        ax.set_axisbelow(True)        # grid lines behind the bars
     for ax, r in zip(axes[:2], (1, 19)):
         for off, rule, c, lab in ((-0.27, f"C_r{r}", BLUE, "C: joint tracker"),
-                                  (0.0, f"C3_r{r}", TEAL, "C3: C + loading state"),
+                                  (0.0, f"C3_r{r}", MAGENTA, "C3: C + loading state"),
                                   (0.27, f"D_r{r}", GREEN, "D with tuned margin")):
             v = [ch[w]["decision_rules"]["rules"][rule][f"cost_r{r}"] for w in names]
             ax.bar(x + off, v, width=0.26, color=c, label=lab)
@@ -579,7 +581,7 @@ def fig_c3(res: Path, figdir: Path) -> None:
     wn = [w for w in EXT_ORDER if w in worlds]
     xx = np.arange(len(wn))
     cx = axes[2]
-    for off, key, c, lab in ((-0.2, "C", BLUE, "C"), (0.2, "C3", TEAL, "C3")):
+    for off, key, c, lab in ((-0.2, "C", BLUE, "C"), (0.2, "C3", MAGENTA, "C3")):
         s = [worlds[w]["C3"]["final_lam_over_true"][key] for w in wn]
         med = np.array([v["median"] for v in s])
         cx.bar(xx + off, med, width=0.38, color=c, label=lab, log=True)

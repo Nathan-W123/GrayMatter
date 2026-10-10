@@ -1,8 +1,8 @@
 {
-  "source_hash": "03d9f771edf7",
-  "config_hash": "ff469ef3c19c",
-  "experiment_seconds": 601.8,
+  "source_hash": "c5e75eb96f22",
+  "config_hash": "ce3ce4fe41b8",
+  "experiment_seconds": 2303.5,
   "workers": 4,
   "cpu_count": 4,
-  "episodes": 390
+  "episodes": 690
 }
