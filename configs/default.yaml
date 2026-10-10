@@ -54,6 +54,15 @@ c2:
   memory: 0.8                     # weight of the past in the unexplained-variance estimates
   draws: 4                        # Monte Carlo draws per particle for C2's crossing probability
 
+# Tracker C3 = tracker C with an abrasive-loading state (swt/tracker3.py). Settings fixed on held-out
+# draws 200-215 (matched, realistic, only_wear, loading, edge_tilt, radial_wear) before C3 was run on
+# any reported draw; frozen together with the pre-registered world realistic_e.
+c3:
+  kappas: [1.5, 3.0, 6.0]         # loading e-folds per pass (uniform prior over these)
+  load_max: 0.5                   # loading limit ~ uniform on [0, load_max]
+  clean_min: 0.4                  # fraction shed between passes ~ uniform on [clean_min, 1]
+  p_loading: 0.5                  # prior probability that the abrasive loads at all
+
 abrasive:
   threshold_fraction: 0.5         # change abrasive when K < 0.5 * K0
   cost_ratios: [1, 3, 19]         # late / early cost ratios of the abrasive-change decision (C: thresholds 1/(1+r))
@@ -170,6 +179,26 @@ worlds:
       texture_um: 1.0
       texture_corr_mm: 1.0
 
+  # Pre-registered with the frozen tracker C3 (committed before C3 or any estimator was run in it).
+  # Its loading differs from the `loading` stress test and from realistic_d in size, build-up and
+  # shedding, and its limit depends on force, which C3 does not model. Break-in, Preston exponent and
+  # loading are inside the published ranges of section 3.6.
+  realistic_e:
+    pad: {kind: foam, thickness_mm: 12.0}
+    removal: {preston_exponent: 0.75}
+    force: {gain_sigma_log: 0.05, ripple: 0.03, ripple_corr: 0.5}
+    wear: {kind: two_stage, fast_fraction: 0.35, fast_ratio: 5.0, rings: 2,
+           loading_max: 0.3, loading_volume_mm3: 150.0, loading_clean: 0.6, loading_force_exponent: 0.5}
+    scan:
+      registration_sigma_mm: 0.3
+      profile_bias_um: 0.5
+      outlier_fraction: 0.005
+      outlier_um: 15.0
+      dropout_fraction: 0.02
+      dropout_gap_points: 8
+      texture_um: 1.0
+      texture_corr_mm: 1.0
+
 experiments:
   main_draw: typical             # 'typical' = the robustness draw at the median standardised distance from
                                   # the prior centre (uses the truths only); or an integer draw id
@@ -190,12 +219,15 @@ experiments:
   contact_sweep_k: [1.0e-4, 30.0, 121]   # log-spaced k_pad sweep: [min, max, n]
 
 # Extended study (`python -m swt run-all --extended`): the pre-registered worlds at 100 draws with
-# tracker C2, and C2 in the stress tests. Uses the drift and decision margins tuned by the core run.
+# trackers C2 and C3, C2 and C3 in the stress tests, and C3 in the core worlds. Uses the drift and
+# decision margins tuned by the core run.
 extended:
-  worlds: [realistic_b, realistic_c, realistic_d]
+  worlds: [realistic_b, realistic_c, realistic_d, realistic_e]
   draws: 100
   stress_worlds: [loading, edge_tilt, radial_wear]
   stress_draws: 30
+  with_C3: true                   # run tracker C3 in every extended world
+  repeat_core_worlds: [matched, realistic]   # re-run (same draws) to compare C3 with C there
 
 # Hyperparameter tuning on held-out draws (ids outside every experiment's range).
 tuning:

@@ -15,13 +15,18 @@ model, tempering and moves, and adds a loading state to every particle:
 * wear, within and between passes, is driven by the removed (loaded) volume.
 
 K_j is the effectiveness of the clean abrasive, so K_j / K_1 measures wear alone and the
-abrasive-change rule uses it. The static unknowns L_inf (uniform on [0, load_max]),
+abrasive-change rule uses it. Whether the abrasive loads at all is itself unknown (prior
+probability p_loading); if it does, the static unknowns L_inf (uniform on [0, load_max]),
 c (uniform on [clean_min, 1]) and kappa (uniform over a few values) are learned from the
 scans: loading makes removal fall faster within a pass than from one pass to the next,
-which wear alone cannot do. Loading that is never shed would be indistinguishable from
-wear (a break-in, say), and should count as wear, hence c >= clean_min. Moves: a joint random walk on (L_inf, c) that shifts the whole
+which wear alone cannot do. Loading that is hardly shed would be indistinguishable from
+wear (a break-in, say), and should count as wear, hence c >= clean_min; and a loading
+that saturates within the first raster line would be a fixed map shape, hence the
+smallest kappa values only. These settings were chosen on held-out draws (200-215) of
+the matched, realistic, break-in-only, loading, tilting-holder and six-ring worlds. Moves: a joint random walk on (L_inf, c) that shifts the whole
 log K path so that the loaded level a (1 - L_inf) is unchanged, and a jump of kappa
-to another value; both leave the tempered path posterior invariant.
+to another value, and switching loading off or on; all leave the tempered path
+posterior invariant.
 
 Surrogate: with 1 - L(u) = (1 - L_inf) + (L_inf - S) psi(u), psi(u) = exp(-kappa u), the
 removal map is A sum_k (-z)^k X_k(eta) + B Psi_kappa(eta), with A = a (1 - L_inf),
@@ -44,10 +49,10 @@ from .surrogate import N_TAB, ExposureTable
 
 @dataclass(frozen=True)
 class C3Config:
-    kappas: tuple[float, ...] = (1.5, 5.0, 15.0)   # loading e-folds per pass (uniform prior over these)
+    kappas: tuple[float, ...] = (1.5, 3.0, 6.0)    # loading e-folds per pass (uniform prior over these)
     load_max: float = 0.5                          # L_inf ~ uniform on [0, load_max]
-    clean_min: float = 0.2                         # c ~ uniform on [clean_min, 1]: loading is temporary
-    p_loading: float = 1.0                         # prior probability that the abrasive loads at all
+    clean_min: float = 0.4                         # c ~ uniform on [clean_min, 1]: loading is temporary
+    p_loading: float = 0.5                         # prior probability that the abrasive loads at all
     rate_drift: float | None = None                # C3's own wear-rate drift (None: C's tuned value)
 
 

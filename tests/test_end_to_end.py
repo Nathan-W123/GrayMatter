@@ -27,7 +27,7 @@ def test_run_all_and_figures(tmp_path, capsys):
     plots.make_extended(res, figs)
     for name in ("fig1_contact_vs_stiffness", "fig2_removal_maps", "fig3_rmse_per_pass",
                  "fig4_parameter_tracking", "fig5_abrasive_change", "fig6_ablation_and_noise",
-                 "fig7_mismatch_and_calibration", "fig8_tracker_c2"):
+                 "fig7_mismatch_and_calibration", "fig8_tracker_c2", "fig9_tracker_c3"):
         assert (figs / f"{name}.png").stat().st_size > 10_000
     on_disk = json.loads((res / "summary.json").read_text())
     assert on_disk["robustness"]["worlds"]["realistic"]["n_draws"] == 3
@@ -43,11 +43,24 @@ def test_run_all_and_figures(tmp_path, capsys):
     assert set(on_disk["robustness"]["worlds"]) == {"matched", "realistic"}
     assert "C2" in on_disk["robustness"]["worlds"]["realistic"]
     assert {w: v["n_draws"] for w, v in ext["robustness"]["worlds"].items()} == \
-        {"realistic_b": 2, "realistic_c": 2, "realistic_d": 2}
+        {"matched": 2, "realistic": 2, "realistic_b": 2, "realistic_c": 2, "realistic_d": 2, "realistic_e": 2}
     assert set(ext["stress_tests"]["worlds"]) == {"loading", "edge_tilt"}
-    assert all("C2" in v for v in ext["stress_tests"]["worlds"].values())
-    e3 = ext["abrasive_change"]["worlds"]["realistic_d"]["decision_rules"]["by_cost_ratio"]["r3"]["C_minus_D_r3"]
-    assert {"p_perm", "p_holm", "p_holm_all"} <= set(e3)
+    assert all("C2" in v and "C3" in v for v in ext["stress_tests"]["worlds"].values())
+    assert all("C3" in v for v in ext["robustness"]["worlds"].values())
+    by_r = ext["abrasive_change"]["worlds"]["realistic_d"]["decision_rules"]["by_cost_ratio"]["r3"]
+    assert {"p_perm", "p_holm", "p_holm_all"} <= set(by_r["C_minus_D_r3"])
+    assert {"p_perm", "p_holm_C3"} <= set(by_r["C3_minus_C_r3"]) and "p_holm_C3" in by_r["C3_minus_D_r3"]
+    # the repeated core worlds count once in the family over core and extended worlds
+    ch = ext["abrasive_change"]["worlds"]
+    for w in ("matched", "realistic"):
+        assert all("p_holm_all" not in e[f"C_minus_D_{tag}"] for tag, e in ch[w]["decision_rules"]["by_cost_ratio"].items())
+    n_all = sum(1 for w in ("realistic_b", "realistic_c", "realistic_d", "realistic_e")
+                for e in ch[w]["decision_rules"]["by_cost_ratio"].values() for k in e if k.startswith("C_minus_") and
+                "p_holm_all" in e[k])
+    assert ext["abrasive_change"]["holm_all_family_size"] >= n_all
+    n_c3 = sum(1 for v in ch.values() for e in v["decision_rules"]["by_cost_ratio"].values()
+               for k in e if k.startswith("C3_minus_"))
+    assert ext["abrasive_change"]["holm_C3_family_size"] == n_c3
     rules = on_disk["abrasive_change"]["worlds"]["realistic"]["decision_rules"]
     assert {"A", "D", "R", "C_r1", "C_r3", "C_r19", "D_r3", "R_r19"} <= set(rules["rules"])
     assert set(rules["by_cost_ratio"]) == {"r1", "r3", "r19"} == set(on_disk["tuning"]["decision_margins"])

@@ -355,15 +355,17 @@ def experiment_abrasive_change(ctx: Context, out: Path, runs: dict, verbose: boo
     return summary
 
 
-def experiment_breakdown(ctx: Context, out: Path, runs: dict, verbose: bool = True) -> dict:
-    """Each mismatch of the realistic world on its own, on the same draws."""
+def experiment_breakdown(ctx: Context, out: Path, runs: dict, verbose: bool = True,
+                         reference: bool = True) -> dict:
+    """Each mismatch of the realistic world on its own, on the same draws (with ``reference``, the
+    matched and realistic worlds on those draws too)."""
     e = ctx.cfg["experiments"]
     default = float(ctx.cfg["scan"]["noise_um"])
     n_draws = int(e.get("breakdown_draws", 0))
     n_passes = ctx.cfg["schedule"]["n_passes"]
     fixed = [int(p) for p in e["crossing_decision_passes"]]
-    order = ["matched"] + [w for w in ctx.worlds if w.startswith("only_")] + ["realistic"] + \
-        [w for w in breakdown_extra_worlds(ctx) if not w.startswith("only_")]
+    order = (["matched"] if reference else []) + [w for w in ctx.worlds if w.startswith("only_")] + \
+        (["realistic"] if reference else []) + [w for w in breakdown_extra_worlds(ctx) if not w.startswith("only_")]
     summary = {"n_draws": n_draws, "worlds": {}}
     table = []
     for w in order:
@@ -498,7 +500,7 @@ def run_extended(ctx: Context, out_dir: str | Path = "results/extended", core_di
     runs = run_draws(ectx, verbose, workers)
     robust = experiment_robustness(ectx, out, runs, verbose)
     change = experiment_abrasive_change(ectx, out, runs, verbose)
-    stress = experiment_breakdown(ectx, out, runs, verbose)
+    stress = experiment_breakdown(ectx, out, runs, verbose, reference=False)
     core = json.loads((Path(core_dir) / "abrasive_change.json").read_text())
     every = {**{f"core:{w}": v for w, v in core["worlds"].items()},
              **{f"extended:{w}": v for w, v in change["worlds"].items() if w not in core["worlds"]}}
