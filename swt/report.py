@@ -2,8 +2,9 @@
 
 A placeholder ``{{dotted.path:format}}`` is replaced by the value at that path in
 results/summary.json (roots: contact_sweep, model_info, tuning, main_run,
-robustness, ablation, noise_sensitivity, abrasive_change, world_breakdown) or,
-under the root ``info``, in results/run_info.json. ``format`` is a Python format spec; ``:d`` rounds to an
+robustness, ablation, noise_sensitivity, abrasive_change, world_breakdown), under
+the root ``info`` in results/run_info.json, and under the roots ``ext`` and
+``ext_info`` in results/extended/summary.json and run_info.json (the extended study). ``format`` is a Python format spec; ``:d`` rounds to an
 integer and ``:pctN`` multiplies by 100 with N decimals. Rendering fails if any
 placeholder cannot be resolved, so no number in the documents can be stale or typed by hand.
 """
@@ -20,6 +21,10 @@ def load_values(results: str | Path) -> dict:
     res = Path(results)
     data = json.loads((res / "summary.json").read_text())
     data["info"] = json.loads((res / "run_info.json").read_text())
+    ext = res / "extended"
+    if (ext / "summary.json").exists():
+        data["ext"] = json.loads((ext / "summary.json").read_text())
+        data["ext_info"] = json.loads((ext / "run_info.json").read_text())
     return data
 
 

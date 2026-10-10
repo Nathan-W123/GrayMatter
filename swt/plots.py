@@ -473,6 +473,69 @@ def fig_mismatch(res: Path, figdir: Path) -> None:
     _save(fig, figdir / "fig7_mismatch_and_calibration.png")
 
 
+# --------------------------------------------------------------------------- fig 8 (extended study)
+
+VIOLET = "#6a4fc1"    # C2 = C + discrepancy layer (extended study)
+EXT_ORDER = ("matched", "realistic", "realistic_b", "realistic_c", "realistic_d", "loading", "edge_tilt",
+             "radial_wear")
+EXT_LABEL = {"matched": "matched", "realistic": "realistic", "realistic_b": "pre-reg. B",
+             "realistic_c": "pre-reg. C", "realistic_d": "pre-reg. D (new)", "loading": "stress: loading",
+             "edge_tilt": "stress: tilting holder", "radial_wear": "stress: ring-wise wear"}
+
+
+def _ext_worlds(res: Path) -> dict:
+    """World summaries with tracker C2: the core robustness worlds, the extended pre-registered
+    worlds and the extended stress tests."""
+    core = json.loads((res / "robustness_summary.json").read_text())["worlds"]
+    ext = json.loads((res / "extended" / "summary.json").read_text())
+    out = {w: v for w, v in core.items() if "C2" in v}
+    out.update({w: v for w, v in ext["robustness"]["worlds"].items() if "C2" in v})
+    out.update({w: v for w, v in ext["stress_tests"]["worlds"].items() if "C2" in v})
+    return {w: out[w] for w in EXT_ORDER if w in out}
+
+
+def fig_extended(res: Path, figdir: Path) -> None:
+    worlds = _ext_worlds(res)
+    names = list(worlds)
+    x = np.arange(len(names))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.6))
+    panels = (("block", "each of 16 map blocks inside its\n90% interval [%]", "Map-shape calibration"),
+              ("mean", "next-pass mean removal inside\nthe 90% interval [%]", "Mean-removal calibration"))
+    for ax, (kind, ylab, title) in zip(axes[:2], panels):
+        for off, est, c in ((-0.2, "C", BLUE), (0.2, "C2", VIOLET)):
+            if kind == "block":
+                v = [worlds[w]["predictive_90"]["regional_inside_fraction_passes_2_on"] if est == "C"
+                     else worlds[w]["C2"]["predictive_90"]["regional_inside_fraction_passes_2_on"] for w in names]
+            else:
+                v = [worlds[w]["predictive_90"]["passes_2_on"]["fraction"] if est == "C"
+                     else worlds[w]["C2"]["predictive_90"]["passes_2_on"]["fraction"] for w in names]
+            ax.bar(x + off, 100 * np.array(v), width=0.38, color=c,
+                   label="C: joint tracker" if est == "C" else "C2: C + discrepancy layer")
+        ax.axhline(90, color=INK, lw=1.0, ls=":")
+        ax.set_ylim(0, 105)
+        ax.set_xticks(x)
+        ax.set_xticklabels([EXT_LABEL[w] for w in names], rotation=35, ha="right")
+        ax.set_ylabel(ylab)
+        ax.set_title(title)
+        ax.grid(axis="x", visible=False)
+    axes[0].legend(loc="lower left", fontsize=11, frameon=True, facecolor="white", edgecolor="none")
+    cx = axes[2]
+    med = np.array([worlds[w]["C2"]["C_over_C2_steady"]["median"] for w in names])
+    ci = np.array([worlds[w]["C2"]["C_over_C2_steady"]["ci90"] for w in names])
+    cx.bar(x, med, width=0.55, color=VIOLET)
+    cx.errorbar(x, med, yerr=[med - ci[:, 0], ci[:, 1] - med], fmt="none", ecolor=INK, capsize=4, lw=1.2)
+    cx.axhline(1.0, color=INK, lw=1.0, ls=":")
+    cx.set_xticks(x)
+    cx.set_xticklabels([EXT_LABEL[w] for w in names], rotation=35, ha="right")
+    cx.set_ylabel("C's error / C2's error, passes 4–20\n(median, 90% bootstrap interval)")
+    cx.set_title("Steady-state accuracy (>1: C2 better)")
+    cx.grid(axis="x", visible=False)
+    fig.suptitle("Extended study: what C2's discrepancy layer changes", x=0.01, ha="left", fontsize=15,
+                 fontweight="bold")
+    fig.tight_layout()
+    _save(fig, figdir / "fig8_tracker_c2.png")
+
+
 # --------------------------------------------------------------------------- drivers
 
 
@@ -496,3 +559,10 @@ def make_all(results: str | Path, figures: str | Path, ctx=None) -> None:
     fig_change(res, figdir)
     fig_ablation_noise(res, figdir)
     fig_mismatch(res, figdir)
+
+
+def make_extended(results: str | Path, figures: str | Path) -> None:
+    res, figdir = Path(results), Path(figures)
+    figdir.mkdir(parents=True, exist_ok=True)
+    _style()
+    fig_extended(res, figdir)

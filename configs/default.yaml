@@ -46,6 +46,14 @@ priors:
   lam_sigma_log: 0.35
   wear_sigma_log: 0.01            # random wear fluctuation per pass (truth and filter)
 
+# Tracker C2 = the frozen tracker C + a discrepancy layer learned from C's one-pass-ahead errors
+# (swt/tracker2.py). Settings fixed on held-out draws 200-215 before C2 was run on any reported draw.
+c2:
+  level_memory: 0.8               # weight of the past in the level discrepancy (per pass)
+  shape_memory: 0.8               # weight of the past in each block's shape discrepancy
+  memory: 0.8                     # weight of the past in the unexplained-variance estimates
+  draws: 4                        # Monte Carlo draws per particle for C2's crossing probability
+
 abrasive:
   threshold_fraction: 0.5         # change abrasive when K < 0.5 * K0
   cost_ratios: [1, 3, 19]         # late / early cost ratios of the abrasive-change decision (C: thresholds 1/(1+r))
@@ -139,6 +147,29 @@ worlds:
       texture_um: 0.8
       texture_corr_mm: 1.0
 
+  # A fourth mismatch world, committed together with tracker C2 (swt/tracker2.py does not change
+  # after this commit) before C2 or any estimator was run in it. Sizes anchored to published values
+  # where they exist (README section 3.6): Preston exponent 0.65 (coated-abrasive fits 0.55-1.0),
+  # a break-in that removes 45% of the initial cutting (wood belts 30-50%), loading of up to 20%
+  # that is only partly shed between passes (15-70% reported; cleaning never restores a new belt),
+  # and a holder tilt stiffness of 1e5 N mm/rad (between the stress test and an assembly
+  # compliance device at 5.5e5). The tilting holder needs the linear pad law.
+  realistic_d:
+    pad: {kind: linear, tilt_stiffness_Nmm_per_rad: 1.0e5}
+    removal: {preston_exponent: 0.65}
+    force: {gain_sigma_log: 0.04, ripple: 0.03, ripple_corr: 0.5}
+    wear: {kind: two_stage, fast_fraction: 0.45, fast_ratio: 8.0, rings: 2,
+           loading_max: 0.2, loading_volume_mm3: 50.0, loading_clean: 0.3}
+    scan:
+      registration_sigma_mm: 0.3
+      profile_bias_um: 0.5
+      outlier_fraction: 0.005
+      outlier_um: 15.0
+      dropout_fraction: 0.02
+      dropout_gap_points: 8
+      texture_um: 1.0
+      texture_corr_mm: 1.0
+
 experiments:
   main_draw: typical             # 'typical' = the robustness draw at the median standardised distance from
                                   # the prior centre (uses the truths only); or an integer draw id
@@ -146,7 +177,8 @@ experiments:
   early_pass: 2                   # pass shown as "early" in the removal-map figure
   robustness_draws: 100           # hidden truths per robustness world
   robustness_worlds: [matched, realistic]
-  validation_worlds: [realistic_b, realistic_c]   # pre-registered mismatch worlds
+  validation_worlds: []          # pre-registered worlds run in the extended study (see `extended`)
+  with_C2: true                   # run tracker C2 alongside C in the robustness and single-effect runs
   validation_draws: 40
   ablation_world: matched         # constant-force ablation (identifiability) in the tracker's own model
   noise_world: realistic
@@ -156,6 +188,14 @@ experiments:
   noise_levels_um: [1.0, 2.0, 5.0, 10.0]
   crossing_decision_passes: [2, 5]
   contact_sweep_k: [1.0e-4, 30.0, 121]   # log-spaced k_pad sweep: [min, max, n]
+
+# Extended study (`python -m swt run-all --extended`): the pre-registered worlds at 100 draws with
+# tracker C2, and C2 in the stress tests. Uses the drift and decision margins tuned by the core run.
+extended:
+  worlds: [realistic_b, realistic_c, realistic_d]
+  draws: 100
+  stress_worlds: [loading, edge_tilt, radial_wear]
+  stress_draws: 30
 
 # Hyperparameter tuning on held-out draws (ids outside every experiment's range).
 tuning:

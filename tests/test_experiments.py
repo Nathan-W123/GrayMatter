@@ -73,3 +73,14 @@ def test_decision_rules_score_change_passes():
     rows2 = [dict(r, world="matched") for r in rows] + [dict(r, world="realistic") for r in rows]
     m2 = experiments._tune_margins(rows2, 6, 0.5, (3,))
     assert m2["r3"]["n_draws"] == 4 and m2["r3"]["D"] == 0.11
+
+
+def test_permutation_p_and_holm():
+    """Sign-flip p-values: a clear shift is significant, symmetric noise is not; Holm keeps the order
+    of the p-values and multiplies the smallest by the family size."""
+    rng = np.random.default_rng(0)
+    assert experiments.paired_permutation_p(rng.normal(1.0, 1.0, 50)) < 0.001
+    assert experiments.paired_permutation_p(rng.normal(0.0, 1.0, 50)) > 0.05
+    assert experiments.paired_permutation_p(np.zeros(10)) == 1.0
+    adj = experiments.holm_adjust({"a": 0.01, "b": 0.04, "c": 0.03})
+    assert adj["a"] == 0.03 and adj["c"] == 0.06 and adj["b"] == 0.06

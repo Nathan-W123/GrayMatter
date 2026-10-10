@@ -244,7 +244,8 @@ class ContactGeometry:
         return self.__dict__["_uv"]
 
     def tilt_solution(self, force: float, k_pad: float, tilt_stiffness: float,
-                      tol: float = 1e-9, max_iter: int = 60) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                      tol: float = 1e-9, max_iter: int = 60,
+                      x0: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Penetration d and tilts (a, b) [rad] of a linear Winkler pad on a holder that can tilt
         with rotational stiffness ``tilt_stiffness`` [N mm / rad] about the pad centre.
 
@@ -253,12 +254,14 @@ class ContactGeometry:
             sum_i A_i k/2 max(0, w_i - gap_i)^2 - F d + tilt_stiffness/2 (a^2 + b^2),
         i.e. force balance sum A p = F and moment balance sum A p (u, v) = -tilt_stiffness (a, b).
         Solved for all stations at once by damped Newton (backtracking on the energy), started
-        from the rigid solution. A very large stiffness gives the rigid holder (a = b = 0).
+        from the rigid solution or from ``x0`` (stations x [d, a, b], e.g. the solution at a nearby
+        force); the energy is convex, so the result does not depend on the start. A very large
+        stiffness gives the rigid holder (a = b = 0).
         """
         u, v = self.plane_coords
         st, seg, A, g = self.station_of_point, self.ptr[:-1], self.area, self.gap
         d = self.penetration(force / k_pad)
-        x = np.stack([d, np.zeros_like(d), np.zeros_like(d)], axis=1)     # (stations, 3)
+        x = np.stack([d, np.zeros_like(d), np.zeros_like(d)], axis=1) if x0 is None else np.array(x0, float)
         kt = float(tilt_stiffness)
 
         def state(x):
@@ -300,7 +303,11 @@ class ContactGeometry:
         """Like :meth:`contact_points` (linear pad) for a holder with finite tilt stiffness."""
         if force <= 0:
             return np.zeros(0, dtype=np.int64), np.zeros(0)
-        d, a, b = self.tilt_solution(force, k_pad, tilt_stiffness)
+        cache = self.__dict__.setdefault("_tilt_last", {})       # warm start from the last force solved
+        key = (float(k_pad), float(tilt_stiffness))
+        d, a, b = self.tilt_solution(force, k_pad, tilt_stiffness, x0=cache.get(key))
+        cache.clear()
+        cache[key] = np.stack([d, a, b], axis=1)
         u, v = self.plane_coords
         st = self.station_of_point
         w = d[st] + a[st] * u + b[st] * v - self.gap

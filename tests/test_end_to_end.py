@@ -14,6 +14,7 @@ TINY = {
                     "validation_draws": 2,
                     "noise_levels_um": [2.0, 5.0], "contact_sweep_k": [1.0e-4, 30.0, 9]},
     "tuning": {"draws": [200, 202], "rate_drift": [0.0, 0.1]},
+    "extended": {"draws": 2, "stress_draws": 1, "stress_worlds": ["loading", "edge_tilt"]},
 }
 
 
@@ -22,9 +23,11 @@ def test_run_all_and_figures(tmp_path, capsys):
     res, figs = tmp_path / "results", tmp_path / "figures"
     summary = experiments.run_all(ctx, res, verbose=True, workers=1)   # verbose: exercise the printing path
     plots.make_all(res, figs)
+    ext = experiments.run_extended(ctx, res / "extended", res, verbose=True, workers=1)
+    plots.make_extended(res, figs)
     for name in ("fig1_contact_vs_stiffness", "fig2_removal_maps", "fig3_rmse_per_pass",
                  "fig4_parameter_tracking", "fig5_abrasive_change", "fig6_ablation_and_noise",
-                 "fig7_mismatch_and_calibration"):
+                 "fig7_mismatch_and_calibration", "fig8_tracker_c2"):
         assert (figs / f"{name}.png").stat().st_size > 10_000
     on_disk = json.loads((res / "summary.json").read_text())
     assert on_disk["robustness"]["worlds"]["realistic"]["n_draws"] == 3
@@ -37,8 +40,14 @@ def test_run_all_and_figures(tmp_path, capsys):
     assert set(on_disk["world_breakdown"]["worlds"]) == {"matched", "only_pad", "only_removal", "only_force",
                                                          "only_wear", "only_scan", "realistic", "radial_wear",
                                                          "edge_tilt", "loading"}
-    assert on_disk["robustness"]["worlds"]["realistic_b"]["n_draws"] == 2
-    assert on_disk["robustness"]["worlds"]["realistic_c"]["n_draws"] == 2
+    assert set(on_disk["robustness"]["worlds"]) == {"matched", "realistic"}
+    assert "C2" in on_disk["robustness"]["worlds"]["realistic"]
+    assert {w: v["n_draws"] for w, v in ext["robustness"]["worlds"].items()} == \
+        {"realistic_b": 2, "realistic_c": 2, "realistic_d": 2}
+    assert set(ext["stress_tests"]["worlds"]) == {"loading", "edge_tilt"}
+    assert all("C2" in v for v in ext["stress_tests"]["worlds"].values())
+    e3 = ext["abrasive_change"]["worlds"]["realistic_d"]["decision_rules"]["by_cost_ratio"]["r3"]["C_minus_D_r3"]
+    assert {"p_perm", "p_holm", "p_holm_all"} <= set(e3)
     rules = on_disk["abrasive_change"]["worlds"]["realistic"]["decision_rules"]
     assert {"A", "D", "R", "C_r1", "C_r3", "C_r19", "D_r3", "R_r19"} <= set(rules["rules"])
     assert set(rules["by_cost_ratio"]) == {"r1", "r3", "r19"} == set(on_disk["tuning"]["decision_margins"])

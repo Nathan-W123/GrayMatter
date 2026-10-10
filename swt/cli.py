@@ -1,6 +1,7 @@
 """Command-line interface.
 
-    python -m swt run-all [--config configs/default.yaml] [--results results] [--figures figures] [--workers N] [--full]
+    python -m swt run-all [--config configs/default.yaml] [--results results] [--figures figures] [--workers N]
+                          [--full] [--extended]
     python -m swt run --config configs/default.yaml
     python -m swt contact-sweep [--config ...]
     python -m swt figures [--results results] [--figures figures]
@@ -40,6 +41,11 @@ def cmd_run_all(args) -> int:
     experiments.run_all(ctx, args.results, workers=args.workers)
     plots.make_all(args.results, args.figures, ctx)
     print(f"[swt] run-all finished in {time.time() - t:.1f} s; results in {args.results}/, figures in {args.figures}/")
+    if getattr(args, "extended", False):
+        t = time.time()
+        experiments.run_extended(ctx, Path(args.results) / "extended", args.results, workers=args.workers)
+        plots.make_extended(args.results, args.figures)
+        print(f"[swt] extended study finished in {time.time() - t:.1f} s; results in {args.results}/extended/")
     return 0
 
 
@@ -74,6 +80,8 @@ def cmd_report(args) -> int:
 def cmd_figures(args) -> int:
     from . import plots
     plots.make_all(args.results, args.figures, None)
+    if (Path(args.results) / "extended" / "summary.json").exists():
+        plots.make_extended(args.results, args.figures)
     return 0
 
 
@@ -95,6 +103,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="worker processes for the multi-draw experiments ('auto' = min(4, CPUs); 1 = serial)")
         sp.add_argument("--full", action="store_true",
                         help="larger single-effect, stress, noise, ablation and tuning experiments (slower)")
+        sp.add_argument("--extended", action="store_true",
+                        help="run-all only: also the extended study (tracker C2, pre-registered worlds at "
+                             "100 draws, stress tests; about 10-12 more minutes)")
         sp.set_defaults(func=fn)
     args = p.parse_args(argv)
     return args.func(args)

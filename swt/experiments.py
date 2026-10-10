@@ -32,6 +32,7 @@ from .geometry import Panel
 from .pad import ContactGeometry, contact_fraction_sweep
 from .process import HiddenTruth, WearLaw, line_effectiveness, simulate_truth
 from .scan import Scanner
+from .tracker2 import C2Config, DiscrepancyTracker
 
 UM = 1e3  # mm -> micrometres
 PARAMS = (("k_pad", "true_k_pad"), ("lam", "true_lam"), ("K", "true_K"), ("K0", "true_K0"))
@@ -135,6 +136,12 @@ def regions(ctx: Context, blocks: tuple[int, int] = (4, 4)):
     return ctx.__dict__["_regions"]
 
 
+def c2_config(cfg: dict) -> C2Config:
+    """Tracker C2's settings from the ``c2`` section of the config (defaults otherwise)."""
+    c = cfg.get("c2", {}) or {}
+    return C2Config(**{k: (int(v) if k in ("draws", "learn_from_pass") else float(v)) for k, v in c.items()})
+
+
 def d_obs_sd(pf) -> float:
     """Noise of D's log K_i in its wear fit: C's prior median wear-fluctuation and transient levels."""
     gm = lambda r: float(np.sqrt(r[0] * r[1])) if r[0] > 0 else float(r[1]) / 2
@@ -144,7 +151,7 @@ def d_obs_sd(pf) -> float:
 def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: str = "alternating",
                 noise_um: float | None = None, experiment: str = "", record_maps: tuple[int, ...] = (),
                 traj=None, full: bool = True, pf_stream: int = 4, with_D: bool | None = None,
-                risk: bool = True, with_B: bool | None = None) -> tuple[list[dict], dict]:
+                risk: bool = True, with_B: bool | None = None, with_C2: bool = False) -> tuple[list[dict], dict]:
     """Run all estimators through one sequence of passes on one hidden truth.
 
     Each pass: (1) every estimator predicts the removal map of the coming pass
@@ -159,7 +166,8 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
     re-runs the identical problem with a different Monte Carlo seed).
     ``with_D`` runs baseline D even when ``full`` is False (tuning of its decision margin);
     ``risk=False`` skips C's second crossing quantile (only the decision rules use it);
-    ``with_B=False`` skips baseline B (not reported for the single-effect and stress worlds).
+    ``with_B=False`` skips baseline B (not reported for the single-effect and stress worlds);
+    ``with_C2`` adds tracker C2 (C plus a discrepancy layer; C itself is unaffected).
     """
     cfg = ctx.cfg
     seed = cfg["seed"]
@@ -183,6 +191,8 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
                        rollout_rng=rng_for(seed, 5, draw), obs_shape=ctx.obs_shape)
     cross_A = A.crossing_pass(schedule, ctx.threshold)
     region_index, region_tables = regions(ctx)
+    C2 = DiscrepancyTracker(C, region_index, region_tables, ctx.obs_shape, c2_config(cfg),
+                            rng_for(seed, 12, draw)) if with_C2 else None
     rows, maps = [], {}
     nan = float("nan")
     for n, action in enumerate(schedule):
@@ -198,6 +208,11 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
                  "D": D.predict(action) if use_D else None, "oracle": traj.oracle[n][oi]}
         p_lo, p_med, p_hi = C.predict_mean_removal(action)
         true_mean = float(true_obs.mean())
+        if C2 is not None:
+            C2.prepare(action)
+            preds["C2"] = C2.predict_map(preds["C"])
+            c2_lo, _, c2_hi = C2.predict_mean_removal()
+            c2_reg = C2.predict_region_removal()
         reg_q = C.predict_region_removal(action, region_tables)
         reg_true = np.array([true_obs[ix].mean() for ix in region_index])
         reg_inside = float(np.mean((reg_q[:, 0] <= reg_true) & (reg_true <= reg_q[:, 2])))
@@ -208,6 +223,8 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
         if use_D:
             D.update(scan, action)
         C.update(scan, action, noise)
+        if C2 is not None:
+            C2.update(scan, noise)
         s = C.summary()
         cr = (C.predict_crossing(n + 1, schedule, ctx.threshold) if full
               else {"median": nan, "lo": nan, "hi": nan, "band_mass": nan})
@@ -243,6 +260,16 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
             "cross_D": D.crossing_pass(n + 1, schedule, ctx.threshold) if use_D else nan,
             "cross_A": cross_A, "cross_true": traj.crossing_pass,
         })
+        if C2 is not None:
+            reg_true_c2 = reg_true
+            row.update({
+                "rmse_C2_um": rmse_um(preds["C2"], true_obs),
+                "C2_pred_mean_lo_um": float(c2_lo) * UM, "C2_pred_mean_hi_um": float(c2_hi) * UM,
+                "C2_pred_mean_inside": bool(c2_lo <= true_mean <= c2_hi),
+                "C2_region_inside_fraction": float(np.mean((c2_reg[:, 0] <= reg_true_c2)
+                                                           & (reg_true_c2 <= c2_reg[:, 2]))),
+                **{f"C2_{k}": v for k, v in C2.summary().items()},
+            })
         rows.append(row)
         if n + 1 in record_maps:
             maps[n + 1] = {"true": true_obs, "scan": scan,
@@ -589,6 +616,10 @@ def _final_draw_summary(rows: list[dict]) -> dict:
         **{f"steady_rmse_{k}_um": _gmean([r[f"rmse_{k}_um"] for r in rows if r["pass"] >= STEADY_FROM])
            for k in ("C", "D", "oracle")},
         **{f"last_two_rmse_{k}_um": _gmean([r[f"rmse_{k}_um"] for r in rows[-2:]]) for k in ("C", "D", "oracle")},
+        **({"final_rmse_C2_um": last["rmse_C2_um"],
+            "startup_rmse_C2_um": _gmean([r["rmse_C2_um"] for r in later if r["pass"] < STEADY_FROM]),
+            "steady_rmse_C2_um": _gmean([r["rmse_C2_um"] for r in rows if r["pass"] >= STEADY_FROM])}
+           if "rmse_C2_um" in last else {}),
         "n_passes_C_better_than_B": sum(r["rmse_C_um"] < r["rmse_B_um"] for r in rows),
         "n_passes_C_better_than_D": sum(r["rmse_C_um"] < r["rmse_D_um"] for r in rows),
         "predictive_inside_passes_2_on": int(sum(r["C_pred_mean_inside"] for r in later)),
@@ -629,6 +660,82 @@ def bootstrap_ci(x, stat=np.median, n_boot: int = 2000, level: float = 0.9, seed
     boots = np.array([stat(x[rng.integers(0, x.size, x.size)]) for _ in range(n_boot)])
     a = (1 - level) / 2
     return [float(np.quantile(boots, a)), float(np.quantile(boots, 1 - a))]
+
+
+def _mean_or_none(x) -> float | None:
+    return float(np.mean(x)) if len(x) else None
+
+
+def _c2_summary(rows: list[dict], finals: list[dict]) -> dict | None:
+    """Tracker C2 against C on the same draws: accuracy ratios (C/C2 > 1: C2 more accurate,
+    medians over draws with 90% bootstrap intervals and sign-flip p-values on the log ratio)
+    and the calibration of C2's 90% intervals (mean removal and blocks)."""
+    if not rows or "rmse_C2_um" not in rows[0]:
+        return None
+    later = [r for r in rows if r["pass"] >= 2]
+    out = {"final_rmse_um": iqr_summary([f["final_rmse_C2_um"] for f in finals])}
+    for label in ("startup", "steady", "final"):
+        ratio = np.array([f[f"{label}_rmse_C_um"] / f[f"{label}_rmse_C2_um"] for f in finals])
+        out[f"C_over_C2_{label}"] = {"median": float(np.median(ratio)), "ci90": bootstrap_ci(ratio),
+                                     "C2_better": int(np.sum(ratio > 1)), "n": int(ratio.size),
+                                     "p_perm": paired_permutation_p(np.log(ratio))}
+    inside = [r["C2_pred_mean_inside"] for r in later]
+    out["predictive_90"] = {
+        "passes_2_on": {"inside": int(sum(inside)), "n": len(inside), "fraction": float(np.mean(inside)),
+                        "below": int(sum(r["true_mean_removal_um"] < r["C2_pred_mean_lo_um"] for r in later)),
+                        "above": int(sum(r["true_mean_removal_um"] > r["C2_pred_mean_hi_um"] for r in later))},
+        "passes_2_to_5": _mean_or_none([r["C2_pred_mean_inside"] for r in later if r["pass"] <= 5]),
+        "passes_11_on": _mean_or_none([r["C2_pred_mean_inside"] for r in later if r["pass"] >= 11]),
+        "regional_inside_fraction_passes_2_on": float(np.mean([r["C2_region_inside_fraction"] for r in later])),
+        "relative_width_passes_2_on": iqr_summary([(r["C2_pred_mean_hi_um"] - r["C2_pred_mean_lo_um"])
+                                                   / r["true_mean_removal_um"] for r in later]),
+    }
+    out["final_level"] = iqr_summary([rr[-1]["C2_level"] for rr in by_draw(rows).values()])
+    out["final_shape_rms"] = iqr_summary([rr[-1]["C2_shape_rms"] for rr in by_draw(rows).values()])
+    return out
+
+
+def paired_permutation_p(diff, n_perm: int = 20000, seed: int = 11) -> float:
+    """Two-sided p-value for a zero mean of paired differences, by random sign flips
+    (exact under the null hypothesis that each difference is symmetric about zero)."""
+    d = np.asarray(diff, dtype=float)
+    d = d[np.isfinite(d)]
+    if d.size == 0 or not np.any(d):
+        return 1.0
+    obs = abs(d.mean())
+    rng = np.random.default_rng(seed)
+    hits = 0
+    for start in range(0, n_perm, 5000):
+        k = min(5000, n_perm - start)
+        signs = rng.integers(0, 2, size=(k, d.size)) * 2 - 1
+        hits += int(np.sum(np.abs(signs @ d) / d.size >= obs - 1e-12))
+    return float((1 + hits) / (n_perm + 1))
+
+
+def holm_adjust(pvals: dict) -> dict:
+    """Holm step-down adjusted p-values (family-wise error control) for a dict of p-values."""
+    keys = sorted(pvals, key=lambda k: pvals[k])
+    m, running, out = len(keys), 0.0, {}
+    for i, k in enumerate(keys):
+        running = max(running, min(1.0, (m - i) * pvals[k]))
+        out[k] = running
+    return out
+
+
+def apply_holm(worlds: dict, family: str, key: str = "p_holm") -> int:
+    """Holm-adjust the paired-comparison p-values of every world's decision rules together
+    (one family: C_r against the tuned D_r and R_r for every cost ratio and world); the
+    adjusted value is stored next to each p-value as ``p_holm``. Returns the family size."""
+    entries = {}
+    for w, s in worlds.items():
+        for tag, e in s["decision_rules"]["by_cost_ratio"].items():
+            for other in (f"D_{tag}", f"R_{tag}"):
+                entries[(w, tag, other)] = e[f"C_minus_{other}"]
+    adj = holm_adjust({k: v["p_perm"] for k, v in entries.items()})
+    for k, v in entries.items():
+        v[key] = adj[k]
+        v[f"{key}_family"] = family
+    return len(entries)
 
 
 def _c_vs_d(finals: list[dict]) -> dict:
@@ -721,9 +828,18 @@ def validation_worlds(ctx: Context) -> list[str]:
 
 
 def breakdown_extra_worlds(ctx: Context) -> list[str]:
-    """Worlds run only for the breakdown: one per mismatch group, plus stress tests."""
-    skip = set(ctx.cfg["experiments"]["robustness_worlds"]) | set(validation_worlds(ctx))
+    """Worlds run only for the breakdown: one per mismatch group, plus stress tests
+    (``experiments.breakdown_worlds`` if given, else every other configured world)."""
+    e = ctx.cfg["experiments"]
+    if e.get("breakdown_worlds") is not None:
+        return [w for w in e["breakdown_worlds"] if w in ctx.worlds]
+    skip = set(e["robustness_worlds"]) | set(validation_worlds(ctx)) | set(extended_only_worlds(ctx))
     return [w for w in ctx.worlds if w not in skip and w != "matched"]
+
+
+def extended_only_worlds(ctx: Context) -> list[str]:
+    """Worlds evaluated only in the extended study (the pre-registered worlds)."""
+    return [w for w in (ctx.cfg.get("extended", {}) or {}).get("worlds", []) if w in ctx.worlds]
 
 
 def tuning_tasks(ctx: Context) -> list[tuple]:
@@ -756,7 +872,8 @@ def run_task(ctx: Context, task: tuple) -> dict:
                                                    traj=traj, full=False, with_D=(i == 0))
         return out
     out[(kind, world, default)], _ = run_episode(ctx, d, world, "alternating", default, experiment=kind, traj=traj,
-                                                 risk=(kind == "robustness"), with_B=(kind == "robustness"))
+                                                 risk=(kind == "robustness"), with_B=(kind == "robustness"),
+                                                 with_C2=bool(e.get("with_C2", False)))
     if kind != "robustness":
         return out
     if world == e.get("ablation_world", "matched") and d < int(e.get("ablation_draws", e["robustness_draws"])):
@@ -1000,6 +1117,7 @@ def _world_robustness(ctx: Context, rows: list[dict]) -> dict:
         "noise_level_C_um": iqr_summary([f["median_sigma_C_um"] for f in finals]),
         "rejected_points_C": iqr_summary([f["median_rejected_points_C"] for f in finals]),
         "passes_redone_C": int(sum(f["passes_redone_C"] for f in finals)),
+        **({"C2": c2} if (c2 := _c2_summary(rows, finals)) is not None else {}),
     }, finals
 
 
@@ -1323,7 +1441,8 @@ def _decision_rules(rows: list[dict], n_passes: int, threshold: float, margins: 
         entry = {"C_threshold_probability": 1.0 / (1.0 + c), "margins": margins.get(tag, {"D": 0.0, "R": 0.0})}
         for other in (f"D_{tag}", f"R_{tag}", "D", "R"):
             diff = cC - _cost(errs[other], c)
-            entry[f"C_minus_{other}"] = {"mean": float(np.mean(diff)), "ci90": bootstrap_ci(diff, np.mean)}
+            entry[f"C_minus_{other}"] = {"mean": float(np.mean(diff)), "ci90": bootstrap_ci(diff, np.mean),
+                                         "p_perm": paired_permutation_p(diff)}
         costs = {k: out["rules"][k][f"cost_{tag}"] for k in out["rules"]}
         entry["lowest_cost_rule"] = min(costs, key=costs.get)
         out["by_cost_ratio"][tag] = entry
@@ -1438,6 +1557,7 @@ def experiment_abrasive_change(ctx: Context, out: Path, runs: dict, verbose: boo
         }
         all_recs += recs
         all_lead += lead["rows"]
+    summary["holm_family_size"] = apply_holm(summary["worlds"], "core")
     write_csv(out / "abrasive_change.csv", all_recs)
     write_csv(out / "abrasive_change_by_lead.csv", all_lead)
     write_json(out / "abrasive_change.json", summary)
@@ -1496,6 +1616,7 @@ def experiment_breakdown(ctx: Context, out: Path, runs: dict, verbose: bool = Tr
             "crossing": cross,
             "noise_level_C_um": iqr_summary([f["median_sigma_C_um"] for f in finals]),
             "rejected_points_C": iqr_summary([f["median_rejected_points_C"] for f in finals]),
+            **({"C2": c2} if (c2 := _c2_summary(rows, finals)) is not None else {}),
         }
         summary["worlds"][w] = s
         table.append({
@@ -1563,4 +1684,55 @@ def run_all(ctx: Context, out_dir: str | Path = "results", verbose: bool = True,
             "episodes": int(sum(len(v) for v in runs.values()) // ctx.cfg["schedule"]["n_passes"]),
             "config": ctx.cfg}
     write_json(out / "run_info.json", info)
+    return summary
+
+
+def extended_context(ctx: Context) -> Context:
+    """The context of the extended study: the pre-registered worlds at ``extended.draws`` draws and
+    the stress tests at ``extended.stress_draws``, nothing else; same tuned drift and margins."""
+    import copy
+    import dataclasses
+    ext = ctx.cfg["extended"]
+    cfg = copy.deepcopy(ctx.cfg)
+    e = cfg["experiments"]
+    e.update({"robustness_worlds": list(ext["worlds"]), "robustness_draws": int(ext["draws"]),
+              "validation_worlds": [], "breakdown_worlds": list(ext.get("stress_worlds", [])),
+              "breakdown_draws": int(ext.get("stress_draws", 0)), "ablation_draws": 0, "noise_draws": 0})
+    out = dataclasses.replace(ctx, cfg=cfg)
+    out.__dict__.update({k: v for k, v in ctx.__dict__.items() if k not in out.__dict__})
+    return out
+
+
+def run_extended(ctx: Context, out_dir: str | Path = "results/extended", core_dir: str | Path = "results",
+                 verbose: bool = True, workers=1) -> dict:
+    """The extended study (``run-all --extended``): tracker C2 against C, D and R in the pre-registered
+    worlds at 100 draws, the stress tests, and Holm-adjusted decision comparisons over the core and
+    extended worlds together. Needs the tuned drift and margins of the core run (in ``ctx``)."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    ectx = extended_context(ctx)
+    if verbose:
+        print(f"\n[swt] extended study: {len(task_list(ectx))} multi-draw tasks "
+              f"({', '.join(ectx.cfg['experiments']['robustness_worlds'])}; stress tests "
+              f"{', '.join(breakdown_extra_worlds(ectx))})...")
+    runs = run_draws(ectx, verbose, workers)
+    robust = experiment_robustness(ectx, out, runs, verbose)
+    change = experiment_abrasive_change(ectx, out, runs, verbose)
+    stress = experiment_breakdown(ectx, out, runs, verbose)
+    core = json.loads((Path(core_dir) / "abrasive_change.json").read_text())
+    every = {**{f"core:{w}": v for w, v in core["worlds"].items()},
+             **{f"extended:{w}": v for w, v in change["worlds"].items()}}
+    n_all = apply_holm(every, "core and extended worlds", key="p_holm_all")
+    change["holm_all_family_size"] = n_all
+    write_json(out / "abrasive_change.json", change)
+    summary = {"robustness": robust, "abrasive_change": change, "stress_tests": stress,
+               "core_decision_p_holm_all": {w: v["decision_rules"]["by_cost_ratio"] for w, v in core["worlds"].items()}}
+    write_json(out / "summary.json", summary)
+    src_hash = hashlib.sha256(b"".join(p.read_bytes() for p in sorted(Path(__file__).parent.glob("*.py"))))
+    write_json(out / "run_info.json", {
+        "source_hash": src_hash.hexdigest()[:12], "config_hash": config_hash(ectx.cfg),
+        "experiment_seconds": round(time.time() - t0, 1), "workers": resolve_workers(workers),
+        "cpu_count": os.cpu_count(),
+        "episodes": int(sum(len(v) for v in runs.values()) // ctx.cfg["schedule"]["n_passes"])})
     return summary
