@@ -4,7 +4,7 @@ import numpy as np
 
 from swt.config import rng_for
 from swt.estimators import ParticleFilter
-from swt.experiments import regions
+from swt.episode import regions
 from swt.process import HiddenTruth, simulate_truth
 from swt.scan import Scanner
 from swt.tracker2 import C2Config, DiscrepancyTracker, _bilinear_weights

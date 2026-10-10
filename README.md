@@ -449,7 +449,14 @@ swt/scan.py         noisy, downsampled scans with optional artefacts
 swt/surrogate.py    scan-point table and O(1) likelihood terms (missing points, profile offsets)
 swt/estimators.py   A nominal, B calibrate-once, D refit each pass, C particle filter
 swt/tracker2.py     C2: discrepancy layer (level and map shape) around C
-swt/experiments.py  all experiments, including tuning and the extended study; writes results/
+swt/episode.py      one episode: every estimator through the passes of one hidden truth
+swt/runner.py       the multi-draw tasks and their parallel execution
+swt/summaries.py    per-draw and per-world summaries (accuracy, calibration, C vs D and C2)
+swt/decisions.py    abrasive-change forecasts and decision rules
+swt/tuning.py       held-out tuning of the wear-rate drift and of D's and R's margins
+swt/describe.py     contact sweep and the model constants quoted here
+swt/stats.py        bootstrap intervals, permutation tests, Holm adjustment, result files
+swt/experiments.py  the experiments and the core and extended drivers; writes results/
 swt/plots.py        all figures, drawn from results/ only
 swt/report.py       renders README.md / SUMMARY.md from docs/*.template.md and results/
 swt/cli.py          command-line entry point (python -m swt ...)

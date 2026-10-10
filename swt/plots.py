@@ -36,6 +36,7 @@ WORLD_LABEL = {"matched": "matched world (tracker's own model)", "realistic": "r
 
 
 def _truthy(v) -> bool:
+    """A boolean read back from a CSV cell."""
     return v is True or v == 1.0 or str(v) == "True"
 
 
@@ -57,6 +58,7 @@ def _log_ticks(ax, candidates) -> None:
 
 
 def _per_pass(rows: list[dict], key: str, passes) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Median and interquartile range of ``key`` over the draws, for every pass in ``passes``."""
     med, lo, hi = [], [], []
     for p in passes:
         v = np.array([r[key] for r in rows if r["pass"] == p], dtype=float)
@@ -67,6 +69,7 @@ def _per_pass(rows: list[dict], key: str, passes) -> tuple[np.ndarray, np.ndarra
 
 
 def _style() -> None:
+    """Shared Matplotlib style of every figure."""
     plt.rcParams.update({
         "figure.facecolor": SURFACE, "axes.facecolor": SURFACE, "savefig.facecolor": SURFACE,
         "font.size": 14, "axes.titlesize": 15, "axes.labelsize": 14, "xtick.labelsize": 13,
@@ -79,6 +82,7 @@ def _style() -> None:
 
 
 def _read_csv(path: Path) -> list[dict]:
+    """Rows of a results CSV, with numeric cells converted to float."""
     with open(path) as f:
         rows = list(csv.DictReader(f))
     out = []
@@ -94,6 +98,7 @@ def _read_csv(path: Path) -> list[dict]:
 
 
 def _save(fig, path: Path) -> None:
+    """Write a figure as a 150-dpi PNG and close it."""
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  wrote {path}")
@@ -103,6 +108,7 @@ def _save(fig, path: Path) -> None:
 
 
 def fig_contact(res: Path, figdir: Path) -> None:
+    """Figure 1: contact fraction against pad stiffness, and the pressure profile under the pad."""
     sweep = _read_csv(res / "contact_sweep.csv")
     summ = json.loads((res / "contact_sweep.json").read_text())
     prof = _read_csv(res / "contact_profiles.csv")
@@ -161,6 +167,7 @@ def fig_contact(res: Path, figdir: Path) -> None:
 
 
 def fig_maps(res: Path, figdir: Path) -> None:
+    """Figure 2: true, scanned and predicted removal maps of the main run, early and at the last pass."""
     z = np.load(res / "main_run_maps.npz")
     main = json.loads((res / "main_run.json").read_text())
     world = main["world"]
@@ -208,6 +215,7 @@ def fig_maps(res: Path, figdir: Path) -> None:
 
 
 def fig_rmse(res: Path, figdir: Path) -> None:
+    """Figure 3: next-pass removal-map error per pass of every estimator, median and IQR over draws."""
     rob = _read_csv(res / "robustness_per_pass.csv")
     rsum = json.loads((res / "robustness_summary.json").read_text())
     worlds = [w for w in ("matched", "realistic", "realistic_b", "realistic_c") if w in rsum["worlds"]]
@@ -246,6 +254,7 @@ def fig_rmse(res: Path, figdir: Path) -> None:
 
 
 def fig_params(res: Path, figdir: Path) -> None:
+    """Figure 4: C's tracked parameters with 90% intervals in the main run, against the truth."""
     main = json.loads((res / "main_run.json").read_text())
     runs = {main["world"]: _read_csv(res / "main_run.csv")}
     for w in main["worlds"]:
@@ -296,6 +305,7 @@ def fig_params(res: Path, figdir: Path) -> None:
 
 
 def fig_change(res: Path, figdir: Path) -> None:
+    """Figure 5: predicted against true abrasive-change pass, and the forecast error against lead time."""
     main_info = json.loads((res / "main_run.json").read_text())
     main = _read_csv(res / "main_run.csv")
     ch = json.loads((res / "abrasive_change.json").read_text())
@@ -354,6 +364,7 @@ def fig_change(res: Path, figdir: Path) -> None:
 
 
 def fig_ablation_noise(res: Path, figdir: Path) -> None:
+    """Figure 6: constant-force ablation (interval widths) and scan-noise sensitivity."""
     ab = json.loads((res / "ablation_summary.json").read_text())
     nz = json.loads((res / "noise_sensitivity.json").read_text())
     fig, axes = plt.subplots(1, 3, figsize=(14, 4.7))
@@ -410,6 +421,7 @@ def fig_ablation_noise(res: Path, figdir: Path) -> None:
 
 
 def fig_mismatch(res: Path, figdir: Path) -> None:
+    """Figure 7: cost of each unmodelled effect, per-pass calibration and the held-out tuning."""
     br = json.loads((res / "world_breakdown.json").read_text())
     rsum = json.loads((res / "robustness_summary.json").read_text())
     tun = json.loads((res / "tuning.json").read_text()) if (res / "tuning.json").exists() else None
@@ -495,6 +507,7 @@ def _ext_worlds(res: Path) -> dict:
 
 
 def fig_extended(res: Path, figdir: Path) -> None:
+    """Figure 8 (extended study): C2 against C, coverage of blocks and of the mean removal, and accuracy."""
     worlds = _ext_worlds(res)
     names = list(worlds)
     x = np.arange(len(names))
@@ -540,6 +553,7 @@ def fig_extended(res: Path, figdir: Path) -> None:
 
 
 def make_main(results: str | Path, figures: str | Path, ctx=None) -> None:
+    """Figures 2 and 4 only (``python -m swt run``)."""
     res, figdir = Path(results), Path(figures)
     figdir.mkdir(parents=True, exist_ok=True)
     _style()
@@ -548,6 +562,7 @@ def make_main(results: str | Path, figures: str | Path, ctx=None) -> None:
 
 
 def make_all(results: str | Path, figures: str | Path, ctx=None) -> None:
+    """Figures 1-7 from ``results``."""
     res, figdir = Path(results), Path(figures)
     figdir.mkdir(parents=True, exist_ok=True)
     _style()
@@ -562,6 +577,7 @@ def make_all(results: str | Path, figures: str | Path, ctx=None) -> None:
 
 
 def make_extended(results: str | Path, figures: str | Path) -> None:
+    """Figure 8, from ``results/extended`` and the core results."""
     res, figdir = Path(results), Path(figures)
     figdir.mkdir(parents=True, exist_ok=True)
     _style()
