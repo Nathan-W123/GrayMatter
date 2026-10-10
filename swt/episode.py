@@ -15,6 +15,8 @@ Random streams (seed, stream, draw): 1 truth parameters, 2 wear fluctuations,
 """
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 
 from .config import Context, rng_for
@@ -73,7 +75,8 @@ def c2_config(cfg: dict) -> C2Config:
 def c3_config(cfg: dict) -> C3Config:
     """Tracker C3's settings from the ``c3`` section of the config (defaults otherwise)."""
     c = cfg.get("c3", {}) or {}
-    return C3Config(**{k: (tuple(float(x) for x in v) if k == "kappas" else float(v)) for k, v in c.items()})
+    return C3Config(**{k: (tuple(float(x) for x in v) if k == "kappas" else None if v is None else float(v))
+                       for k, v in c.items()})
 
 
 def loading_table(ctx: Context) -> LoadingTable:
@@ -139,8 +142,10 @@ def run_episode(ctx: Context, draw: int, world: str = "matched", schedule_kind: 
     region_index, region_tables = regions(ctx)
     C2 = DiscrepancyTracker(C, region_index, region_tables, ctx.obs_shape, c2_config(cfg),
                             rng_for(seed, 12, draw)) if with_C2 else None
-    C3 = LoadingTracker(loading_table(ctx), ctx.priors, ctx.pf, rng_for(seed, 13, draw),
-                        rollout_rng=rng_for(seed, 14, draw), obs_shape=ctx.obs_shape, c3=c3_config(cfg),
+    c3cfg = c3_config(cfg)
+    pf3 = ctx.pf if c3cfg.rate_drift is None else dataclasses.replace(ctx.pf, rate_drift=c3cfg.rate_drift)
+    C3 = LoadingTracker(loading_table(ctx), ctx.priors, pf3, rng_for(seed, 13, draw),
+                        rollout_rng=rng_for(seed, 14, draw), obs_shape=ctx.obs_shape, c3=c3cfg,
                         region_index=region_index) if with_C3 else None
     rows, maps = [], {}
     nan = float("nan")

@@ -48,6 +48,7 @@ class C3Config:
     load_max: float = 0.5                          # L_inf ~ uniform on [0, load_max]
     clean_min: float = 0.2                         # c ~ uniform on [clean_min, 1]: loading is temporary
     p_loading: float = 1.0                         # prior probability that the abrasive loads at all
+    rate_drift: float | None = None                # C3's own wear-rate drift (None: C's tuned value)
 
 
 def _gram(A: np.ndarray, B: np.ndarray) -> np.ndarray:
